@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: "Choga";
+  src: url("../public/fonts/Bovacy-Regular.woff2") format("woff2");
+  font-weight: bolder;
+  font-style: normal;
+}

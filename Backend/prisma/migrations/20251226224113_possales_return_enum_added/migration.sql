@@ -1,0 +1,5 @@
+-- CreateEnum
+CREATE TYPE "PosSaleStatus" AS ENUM ('COMPLETED', 'RETURNED', 'VOIDED');
+
+-- AlterTable
+ALTER TABLE "pos_sales" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
