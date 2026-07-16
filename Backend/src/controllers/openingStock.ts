@@ -229,9 +229,9 @@ export class OpeningStockController {
               item: {
                 select: {
                   id: true,
-                  code: true,
+                  sku: true,
                   name: true,
-                  unitOfMeasure: true,
+                  uom: true,
                 },
               },
             },
