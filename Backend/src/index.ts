@@ -19,6 +19,7 @@ import journal from "./routes/journal";
 import adjustment from "./routes/stockAdjustment";
 import dashboardRoutes from "./routes/dashboard";
 import openingStockRoutes from "./routes/openingStock";
+import itemImportRoutes from "./routes/itemImport";
 
 dotenv.config();
 
@@ -75,6 +76,7 @@ app.use("/api/v1/journal", journal);
 app.use("/api/v1/adjustment", adjustment);
 app.use("/api/v1/dashboard", dashboardRoutes);
 app.use("/api/v1/opening-stock", openingStockRoutes);
+app.use("/api/v1/items-import", itemImportRoutes);
 
 // Uploads
 app.use("/uploads", express.static(uploadsPath));

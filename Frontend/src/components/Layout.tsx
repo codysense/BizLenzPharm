@@ -104,6 +104,7 @@ const Layout = ({ children }: LayoutProps) => {
         { name: "Locations", href: "/inventory/locations" },
         { name: "Warehouses", href: "/inventory/warehouses" },
         { name: "OpeningStock", href: "/inventory/openingstock" },
+        { name: "Import Items", href: "/inventory/import-items" },
         { name: "Transfers", href: "/inventory/transfers" },
         {
           name: "Ledger",

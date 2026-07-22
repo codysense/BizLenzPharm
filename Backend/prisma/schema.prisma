@@ -229,7 +229,7 @@ model Item {
   updatedAt             DateTime                @updatedAt
   sellingPriceBulk      Decimal?                @db.Decimal(15, 4)
   sellingPriceOrdinary  Decimal?                @db.Decimal(15, 4)
-  sellingPriceWIC       Decimal?                @db.Decimal(15, 4)
+  cartonQuantity        Decimal?                @db.Decimal(15, 4)
   InventoryTransferItem InventoryTransferItem[]
   priceList             ItemPriceList[]
   AdjustmentLines       AdjustmentLines[]

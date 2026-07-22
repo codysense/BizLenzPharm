@@ -24,6 +24,7 @@ import OpeningStock from "./pages/inventory/OpeningStocks";
 import InventoryTransfer from "./pages/inventory/InventoryTransfer";
 import InventoryLedger from "./pages/inventory/Ledger";
 import InventoryValuation from "./pages/inventory/Valuation";
+import ImportItems from "./pages/inventory/ImportItems";
 
 // Purchase Pages
 import PurchaseOrders from "./pages/purchases/Orders";
@@ -243,6 +244,14 @@ function App() {
               element={
                 <ProtectedRoute allowedModules={["inventory", "production"]}>
                   <InventoryTransfer />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/inventory/import-items"
+              element={
+                <ProtectedRoute allowedModules={["inventory", "production"]}>
+                  <ImportItems />
                 </ProtectedRoute>
               }
             />

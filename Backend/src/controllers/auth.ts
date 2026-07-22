@@ -133,15 +133,6 @@ export class AuthController {
     try {
       const { email, password } = loginSchema.parse(req.body);
 
-      // Clean expired sessions first
-      await prisma.userSession.deleteMany({
-        where: {
-          expiresAt: {
-            lte: new Date(),
-          },
-        },
-      });
-
       const user = await prisma.user.findUnique({
         where: { email },
         include: {
@@ -175,18 +166,33 @@ export class AuthController {
         });
       }
 
-      // Optional: allow same user to login again without consuming extra slot
-      const existingSession = await prisma.userSession.findFirst({
-        where: {
-          userId: user.id,
-          expiresAt: {
-            gt: new Date(),
+      // Execute all checks and session creations inside the transaction
+      const result = await prisma.$transaction(async (tx) => {
+        // 1. Clean expired sessions inside transaction first
+        await tx.userSession.deleteMany({
+          where: {
+            expiresAt: {
+              lte: new Date(),
+            },
           },
-        },
-      });
+        });
 
-      if (!existingSession) {
-        const activeSessions = await prisma.userSession.count({
+        // 2. ENFORCE SINGLE SESSION: Delete all existing active sessions and
+        // refresh tokens for THIS user (this logs them out of any other devices)
+        await tx.userSession.deleteMany({
+          where: {
+            userId: user.id,
+          },
+        });
+
+        await tx.refreshToken.deleteMany({
+          where: {
+            userId: user.id,
+          },
+        });
+
+        // 3. Count other active sessions across the entire system
+        const activeSessions = await tx.userSession.count({
           where: {
             expiresAt: {
               gt: new Date(),
@@ -194,15 +200,16 @@ export class AuthController {
           },
         });
 
-        if (activeSessions >= 3) {
-          return res.status(403).json({
-            error:
-              "Maximum concurrent users reached. Logout another user first.",
-          });
+        // 4. LIMIT CONCURRENT USERS TO 2: Reject if 2 other users are logged in
+        if (activeSessions >= 2) {
+          const error = new Error(
+            "Maximum concurrent users reached. Logout another user first.",
+          );
+          (error as any).statusCode = 403;
+          throw error;
         }
-      }
 
-      await prisma.$transaction(async (tx) => {
+        // 5. Update user last login
         await tx.user.update({
           where: {
             id: user.id,
@@ -233,7 +240,7 @@ export class AuthController {
           },
         });
 
-        // Create session
+        // Create new active session
         await tx.userSession.create({
           data: {
             userId: user.id,
@@ -246,18 +253,18 @@ export class AuthController {
           {
             userId: user.id,
             email: user.email,
+            sessionToken: hashedRefreshToken,
           },
           process.env.JWT_SECRET as string,
           process.env.JWT_ACCESS_EXPIRY as string,
         );
 
         const roles = user.userRoles.map((ur) => ur.role.name);
-
         const permissions = user.userRoles.flatMap((ur) =>
           ur.role.rolePermissions.map((rp) => rp.permission.name),
         );
 
-        res.json({
+        return {
           user: {
             id: user.id,
             email: user.email,
@@ -267,12 +274,15 @@ export class AuthController {
           },
           accessToken,
           refreshToken,
-        });
+        };
       });
+
+      return res.json(result);
     } catch (error) {
       console.error("Login error:", error);
 
-      return res.status(400).json({
+      const statusCode = (error as any).statusCode || 400;
+      return res.status(statusCode).json({
         error: error instanceof Error ? error.message : "Invalid request data",
       });
     }
@@ -364,7 +374,7 @@ export class AuthController {
 
       // 6️ Generate new tokens
       const newAccessToken = generateToken(
-        { userId: user.id, email: user.email },
+        { userId: user.id, email: user.email, sessionToken: hashedToken },
         process.env.JWT_SECRET as string,
         process.env.JWT_ACCESS_EXPIRY as string,
       );

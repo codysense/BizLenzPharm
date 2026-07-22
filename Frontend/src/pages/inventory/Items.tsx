@@ -113,6 +113,11 @@ const Items = () => {
       width: "w-24",
     },
     {
+      key: "cartonQuantity",
+      header: "Quantity per Carton",
+      width: "w-36",
+    },
+    {
       key: "isActive",
       header: "Status",
       cell: (item: Item) => (

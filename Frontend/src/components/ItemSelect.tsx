@@ -11,6 +11,8 @@ interface Item {
   sku: string;
   name: string;
   stockQty: number;
+  cartonQuantity?: number;
+  uom: string;
 }
 
 interface ItemSelectProps {
@@ -122,6 +124,8 @@ export function ItemSelect({
     [items, value],
   );
 
+  console.log("Selected Item:", items);
+
   return (
     <div>
       <Combobox value={value} onChange={onChange}>
@@ -171,7 +175,10 @@ export function ItemSelect({
                             selected ? "font-medium" : "font-normal"
                           }`}
                         >
-                          {i.name} - {i.stockQty}
+                          {i.name} -{" "}
+                          {i.cartonQuantity
+                            ? `${Math.floor(i.stockQty / i.cartonQuantity)}  carton(s)  ${i.stockQty % i.cartonQuantity} ${i.uom} `
+                            : `${i.stockQty} ${i.uom} `}
                         </span>
 
                         {selected && (

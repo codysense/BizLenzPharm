@@ -37,13 +37,13 @@ const createItemSchema = z.object({
     "FINISHED_GOODS",
     "CONSUMABLE",
   ]),
-  uom: z.string().default("QTY"),
+  uom: z.string().default("pcs"),
   minimumStockLevel: z.number().positive().optional(),
   costingMethod: z.enum(["GLOBAL", "FIFO", "WEIGHTED_AVG"]).default("GLOBAL"),
   standardCost: z.number().optional(),
   sellingPriceOrdinary: z.number().optional(),
   sellingPriceBulk: z.number().optional(),
-  sellingPriceWIC: z.number().optional(),
+  cartonQuatity: z.number().optional(),
   priceList: z.array(
     z.object({
       // itemId: z.string().cuid(),
@@ -230,7 +230,7 @@ const CreateItemModal = ({ onClose, onSuccess }: CreateItemModalProps) => {
                 </div>
 
                 {/* UOM */}
-                <div className="sm:col-span-2">
+                <div>
                   <label className="text-sm text-gray-700">UOM</label>
                   <select
                     {...register("uom")}
@@ -243,6 +243,18 @@ const CreateItemModal = ({ onClose, onSuccess }: CreateItemModalProps) => {
                       </option>
                     ))}
                   </select>
+                </div>
+                <div>
+                  <label className="text-sm text-gray-700">
+                    {" "}
+                    Quantity per Carton
+                  </label>
+                  <input
+                    {...register("cartonQuatity", { valueAsNumber: true })}
+                    type="number"
+                    step="0.01"
+                    className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200 focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
                 </div>
               </div>
             </div>

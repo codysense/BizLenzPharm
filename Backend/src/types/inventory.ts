@@ -12,7 +12,7 @@ export const createItemSchema = z.object({
   standardCost: z.number().optional(),
   sellingPriceOrdinary: z.number().optional(),
   sellingPriceBulk: z.number().optional(),
-  sellingPriceWIC: z.number().optional(),
+  cartonQuantity: z.number().optional(),
   priceList: z.array(
     z.object({
       // itemId: z.string().cuid(),
@@ -20,6 +20,7 @@ export const createItemSchema = z.object({
       price: z.number().positive(),
     }),
   ),
+
   taxCode: z.string().optional(),
 });
 

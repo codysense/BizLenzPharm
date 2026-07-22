@@ -181,7 +181,9 @@ const PosTerminal = ({
             const customerGroup = selectedCustomer.customerGroupName;
 
             const groupPrice = selectedItem.priceList?.find(
-              (p: any) => p.customerGroup === customerGroup,
+              (p: any) =>
+                (p.customerGroup || "").trim() ===
+                (selectedCustomer?.customerGroupName || "").trim(),
             );
 
             const unitPrice = groupPrice
@@ -679,7 +681,6 @@ const PosTerminal = ({
                           {...register(`saleLines.${index}.unitPrice`, {
                             valueAsNumber: true,
                           })}
-                          disabled
                           className="w-full bg-gray-100 border border-gray-200 rounded-xl px-3 py-2 text-gray-700"
                         />
                       </div>

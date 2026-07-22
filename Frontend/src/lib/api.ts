@@ -2,6 +2,7 @@ import { useAuthStore } from "../store/authStore";
 import toast from "react-hot-toast";
 import { CreatePosReturnRequest } from "../types/api";
 import { get } from "react-hook-form";
+//import ImportItems from "../pages/inventory/ImportItems";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "/api/v1";
 
@@ -174,6 +175,11 @@ export const userApi = {
   updateUser: (id: string, data: any) => api.put(`/auth/users/${id}`, data),
 };
 
+//ItemImport
+export const itemImportApi = {
+  importItems: (data: any) => api.post("/items-import", data),
+};
+
 // Inventory API
 export const inventoryApi = {
   getItems: (params?: {
@@ -218,6 +224,7 @@ export const inventoryApi = {
         params ? "?" + new URLSearchParams(params as any).toString() : ""
       }`,
     ),
+
   exportInventoryLedger: async (
     format: "csv" | "excel" | "pdf",
     filters: any,
