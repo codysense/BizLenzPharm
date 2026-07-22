@@ -96,6 +96,8 @@ export const authenticate = async (
   try {
     const authHeader = req.headers.authorization;
 
+    //console.log("Authorization Header:", authHeader); // Debugging line
+
     if (!authHeader?.startsWith("Bearer ")) {
       return res.status(401).json({ error: "No token provided" });
     }
