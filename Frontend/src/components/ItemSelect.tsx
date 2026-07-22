@@ -124,7 +124,7 @@ export function ItemSelect({
     [items, value],
   );
 
-  console.log("Selected Item:", items);
+  //console.log("Selected Item:", items);
 
   return (
     <div>

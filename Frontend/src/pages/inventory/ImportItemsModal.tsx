@@ -47,12 +47,18 @@ interface ImportItemsModalProps {
 const ImportItemsModal = ({ onClose, onSuccess }: ImportItemsModalProps) => {
   const [fileName, setFileName] = useState<string>("");
   const [parseError, setParseError] = useState<string | null>(null);
+  // Track progress of sequential chunks
+  const [importProgress, setImportProgress] = useState<{
+    current: number;
+    total: number;
+    status: string;
+  } | null>(null);
   const {
     register,
     watch,
     setValue,
     handleSubmit,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<ImportItemsFormData>({
     resolver: zodResolver(importItemsSchema),
     defaultValues: {
@@ -87,83 +93,87 @@ const ImportItemsModal = ({ onClose, onSuccess }: ImportItemsModalProps) => {
         const workbook = XLSX.read(data, { type: "binary" });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-
         // Parse rows as raw JSON array
         const rawRows = XLSX.utils.sheet_to_json<any>(worksheet);
         if (rawRows.length === 0) {
           throw new Error("The uploaded sheet appears to be empty.");
         }
         // Map spreadsheet columns to matching API keys
-        const formattedItems = rawRows.map((row: any, idx: number) => {
-          // Normalise keys by removing extra spaces and forcing lowercase checks
-          const normalizedRow: { [key: string]: any } = {};
-          Object.keys(row).forEach((key) => {
-            normalizedRow[key.trim().toLowerCase()] = row[key];
-          });
-          // Extract key name or fallbacks
-          const name =
-            normalizedRow["name"] ||
-            normalizedRow["item name"] ||
-            normalizedRow["item"] ||
-            normalizedRow["product/service name"];
-          if (!name) {
-            throw new Error(
-              `Row ${idx + 2} is missing the Item Name (must have "name" header)`,
-            );
-          }
-          return {
-            name: String(name).trim(),
-            description:
-              normalizedRow["description"] ||
-              normalizedRow["sales description"] ||
-              "",
-            type: normalizedRow["type"] || "FINISHED_GOODS",
-            uom: normalizedRow["uom"] || normalizedRow["unit"] || "Pcs",
-            minimumStockLevel: normalizedRow["minimumstocklevel"]
-              ? Number(normalizedRow["minimumstocklevel"])
-              : undefined,
-            costingMethod: normalizedRow["costingmethod"] || "GLOBAL",
-            standardCost: normalizedRow["standardcost"]
-              ? Number(normalizedRow["standardcost"])
-              : undefined,
-
-            cartonQuantity: normalizedRow["cartonquantity"]
-              ? Number(normalizedRow["cartonquantity"])
-              : undefined,
-            taxCode: normalizedRow["taxcode"]
-              ? String(normalizedRow["taxcode"])
-              : undefined,
-            salesPrice: Number(
-              normalizedRow["salesprice"] ||
-                normalizedRow["price"] ||
-                normalizedRow["rate"] ||
-                0,
-            ),
-            wholesalesPrice: Number(
-              normalizedRow["wholesalesprice"] ||
-                normalizedRow["wholesale price"] ||
-                0,
-            ),
-            costPrice: Number(
-              normalizedRow["costprice"] ||
-                normalizedRow["cost"] ||
-                normalizedRow["average cost"] ||
-                0,
-            ),
-            stockBalance: Number(
-              normalizedRow["stockbalance"] ||
-                normalizedRow["qty on hand"] ||
-                normalizedRow["qty"] ||
-                0,
-            ),
-          };
-        });
+        const formattedItems = rawRows
+          .map((row: any) => {
+            // Normalise keys by removing extra spaces and forcing lowercase checks
+            const normalizedRow: { [key: string]: any } = {};
+            Object.keys(row).forEach((key) => {
+              normalizedRow[key.trim().toLowerCase()] = row[key];
+            });
+            // Extract key name or fallbacks
+            const name =
+              normalizedRow["name"] ||
+              normalizedRow["item name"] ||
+              normalizedRow["item"] ||
+              normalizedRow["product/service name"];
+            // SKIP row if name is missing or empty (handles footer / total / empty rows)
+            if (!name || String(name).trim() === "") {
+              return null;
+            }
+            return {
+              name: String(name).trim(),
+              description:
+                normalizedRow["description"] ||
+                normalizedRow["sales description"] ||
+                "",
+              type: normalizedRow["type"] || "FINISHED_GOODS",
+              uom: normalizedRow["uom"] || normalizedRow["unit"] || "Pcs",
+              minimumStockLevel: normalizedRow["minimumstocklevel"]
+                ? Number(normalizedRow["minimumstocklevel"])
+                : undefined,
+              costingMethod: normalizedRow["costingmethod"] || "GLOBAL",
+              standardCost: normalizedRow["standardcost"]
+                ? Number(normalizedRow["standardcost"])
+                : undefined,
+              cartonQuantity: normalizedRow["cartonquantity"]
+                ? Number(normalizedRow["cartonquantity"])
+                : undefined,
+              taxCode: normalizedRow["taxcode"]
+                ? String(normalizedRow["taxcode"])
+                : undefined,
+              salesPrice: Number(
+                normalizedRow["salesprice"] ||
+                  normalizedRow["price"] ||
+                  normalizedRow["rate"] ||
+                  0,
+              ),
+              wholesalesPrice: Number(
+                normalizedRow["wholesalesprice"] ||
+                  normalizedRow["wholesale price"] ||
+                  0,
+              ),
+              costPrice: Number(
+                normalizedRow["costprice"] ||
+                  normalizedRow["cost"] ||
+                  normalizedRow["average cost"] ||
+                  0,
+              ),
+              stockBalance: Number(
+                normalizedRow["stockbalance"] ||
+                  normalizedRow["qty on hand"] ||
+                  normalizedRow["qty"] ||
+                  0,
+              ),
+            };
+          })
+          .filter((item): item is NonNullable<typeof item> => item !== null); // Remove skipped rows
+        if (formattedItems.length === 0) {
+          throw new Error("No items with valid names found in the sheet.");
+        }
         // Set items in React Hook Form state
         setValue("items", formattedItems, {
           shouldValidate: true,
           shouldDirty: true,
         });
-        toast.success(`Successfully parsed ${formattedItems.length} items`);
+        toast.success(
+          `Successfully parsed ${formattedItems.length} items (skipped empty rows)`,
+        );
       } catch (err: any) {
         console.error("Excel parse error:", err);
         setParseError(
@@ -186,6 +196,11 @@ const ImportItemsModal = ({ onClose, onSuccess }: ImportItemsModalProps) => {
       return sum + Number(item.stockBalance || 0) * Number(item.costPrice || 0);
     }, 0);
   }, [items]);
+  const costPrice = useMemo(() => {
+    return items.reduce((sum, item) => {
+      return sum + Number(item.costPrice || 0);
+    }, 0);
+  }, [items]);
   const removeItem = (index: number) => {
     const copy = [...items];
     copy.splice(index, 1);
@@ -194,24 +209,67 @@ const ImportItemsModal = ({ onClose, onSuccess }: ImportItemsModalProps) => {
       shouldValidate: true,
     });
   };
+  // Chunk submissions to avoid 413 (Payload Too Large) and SQL timeout issues
   const onSubmit = async (data: ImportItemsFormData) => {
+    const chunkSize = 200; // Slice items in chunks of 200
+    const totalItems = data.items.length;
+    const totalChunks = Math.ceil(totalItems / chunkSize);
+    setImportProgress({
+      current: 0,
+      total: totalChunks,
+      status: `Initializing import for ${totalItems} items...`,
+    });
     try {
-      // Trigger API post mapping to our custom ItemImportController endpoint
-      await itemImportApi.importItems(data);
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * chunkSize;
+        const end = Math.min((i + 1) * chunkSize, totalItems);
+        const chunkItems = data.items.slice(start, end);
+        setImportProgress({
+          current: i,
+          total: totalChunks,
+          status: `Uploading batch ${i + 1} of ${totalChunks} (items ${start + 1} to ${end})...`,
+        });
+        // Trigger API post mapping to our custom ItemImportController endpoint
+        await itemImportApi.importItems({
+          warehouseId: data.warehouseId,
+          openingDate: data.openingDate,
+          remarks: `${data.remarks || "QB Import"} (Part ${i + 1}/${totalChunks})`,
+          items: chunkItems,
+        });
+      }
+      setImportProgress({
+        current: totalChunks,
+        total: totalChunks,
+        status: "Finalizing import ledger entries...",
+      });
       toast.success(
-        "QuickBooks inventory items and opening stock imported successfully!",
+        `Successfully imported all ${totalItems} items in ${totalChunks} batches!`,
       );
+      setImportProgress(null);
       onSuccess();
     } catch (error: any) {
       console.error(error);
-      toast.error(error?.response?.data?.error || "Failed to import items");
+      const errorMsg =
+        error?.response?.data?.error ||
+        error?.message ||
+        "Failed to import items";
+      toast.error(errorMsg);
+      setImportProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: `Failed at batch ${prev.current + 1}: ${errorMsg}`,
+            }
+          : null,
+      );
     }
   };
+  const isProcessing = importProgress !== null;
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto">
       <div
         className="fixed inset-0 bg-black/40 backdrop-blur-sm"
-        onClick={onClose}
+        onClick={() => !isProcessing && onClose()}
       />
       <div className="relative z-10 flex min-h-screen items-center justify-center px-4 py-10">
         <div className="w-full max-w-6xl overflow-hidden rounded-3xl border border-gray-100 bg-white shadow-2xl">
@@ -228,8 +286,9 @@ const ImportItemsModal = ({ onClose, onSuccess }: ImportItemsModalProps) => {
                 </p>
               </div>
               <button
+                disabled={isProcessing}
                 onClick={onClose}
-                className="rounded-full bg-white/20 p-2 hover:bg-white/30 transition-colors"
+                className="rounded-full bg-white/20 p-2 hover:bg-white/30 transition-colors disabled:opacity-30"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -246,15 +305,15 @@ const ImportItemsModal = ({ onClose, onSuccess }: ImportItemsModalProps) => {
                 <h4 className="text-sm font-semibold text-gray-700">
                   Import Settings
                 </h4>
-
                 {/* Warehouse */}
                 <div>
                   <label className="text-sm font-medium text-gray-700">
                     Warehouse *
                   </label>
                   <select
+                    disabled={isProcessing}
                     {...register("warehouseId")}
-                    className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"
                   >
                     <option value="">Select Warehouse</option>
                     {warehouses?.warehouses.map((warehouse) => (
@@ -275,9 +334,10 @@ const ImportItemsModal = ({ onClose, onSuccess }: ImportItemsModalProps) => {
                     Opening Date *
                   </label>
                   <input
+                    disabled={isProcessing}
                     {...register("openingDate")}
                     type="date"
-                    className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"
                   />
                   {errors.openingDate && (
                     <p className="mt-1 text-xs text-red-600">
@@ -291,9 +351,10 @@ const ImportItemsModal = ({ onClose, onSuccess }: ImportItemsModalProps) => {
                     Remarks
                   </label>
                   <textarea
+                    disabled={isProcessing}
                     {...register("remarks")}
                     rows={2}
-                    className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none"
+                    className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none disabled:opacity-50"
                     placeholder="Optional remarks..."
                   />
                 </div>
@@ -301,10 +362,11 @@ const ImportItemsModal = ({ onClose, onSuccess }: ImportItemsModalProps) => {
               {/* Right Column: File Upload Area */}
               <div className="lg:col-span-2 flex flex-col justify-between rounded-2xl border-2 border-dashed border-gray-200 bg-white p-6 text-center hover:border-indigo-500 transition-colors relative">
                 <input
+                  disabled={isProcessing}
                   type="file"
                   accept=".xlsx, .xls, .csv"
                   onChange={handleFileUpload}
-                  className="absolute inset-0 cursor-pointer opacity-0"
+                  className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
                 />
                 <div className="my-auto space-y-3">
                   <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 text-blue-600">
@@ -345,7 +407,6 @@ const ImportItemsModal = ({ onClose, onSuccess }: ImportItemsModalProps) => {
                       Parsed Items Preview ({items.length})
                     </h4>
                   </div>
-
                   <div className="overflow-x-auto max-h-[300px]">
                     <table className="min-w-full text-sm">
                       <thead className="bg-gray-50 sticky top-0 border-b">
@@ -409,9 +470,10 @@ const ImportItemsModal = ({ onClose, onSuccess }: ImportItemsModalProps) => {
                             </td>
                             <td className="px-6 py-3 text-center">
                               <button
+                                disabled={isProcessing}
                                 type="button"
                                 onClick={() => removeItem(index)}
-                                className="text-red-500 hover:text-red-700 transition-colors"
+                                className="text-red-500 hover:text-red-700 transition-colors disabled:opacity-30"
                               >
                                 <Trash2 className="h-4 w-4" />
                               </button>
@@ -451,21 +513,44 @@ const ImportItemsModal = ({ onClose, onSuccess }: ImportItemsModalProps) => {
                 </div>
               </div>
             )}
+            {/* Chunk Progress Bar */}
+            {isProcessing && (
+              <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-5 space-y-3">
+                <div className="flex justify-between items-center text-sm font-semibold text-indigo-900">
+                  <span>{importProgress.status}</span>
+                  <span>
+                    {Math.round(
+                      (importProgress.current / importProgress.total) * 100,
+                    )}
+                    %
+                  </span>
+                </div>
+                <div className="w-full bg-gray-250 rounded-full h-2.5 overflow-hidden">
+                  <div
+                    className="bg-indigo-600 h-2.5 rounded-full transition-all duration-300"
+                    style={{
+                      width: `${(importProgress.current / importProgress.total) * 100}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
             {/* Footer Buttons */}
             <div className="flex justify-end gap-3 border-t pt-5">
               <button
+                disabled={isProcessing}
                 type="button"
                 onClick={onClose}
-                className="rounded-xl border px-5 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                className="rounded-xl border px-5 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                disabled={isSubmitting || items.length === 0}
+                disabled={isProcessing || items.length === 0}
                 className="rounded-xl bg-indigo-600 px-6 py-2.5 text-sm text-white shadow-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
               >
-                {isSubmitting
+                {isProcessing
                   ? "Importing Ledger..."
                   : "Import Items & Balances"}
               </button>
