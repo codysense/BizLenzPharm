@@ -176,7 +176,7 @@ export const PendingPOSSales = ({
                       setSelectedSale(sale);
                       setIsDetailOpen(true);
                     }}
-                    className="py-2.5 rounded-xl border border-gray-200 text-gray-700 hover:bg-gray-50 text-sm font-medium flex items-center justify-center gap-2"
+                    className="py-2.5 px-1 rounded-xl border border-gray-200 text-gray-700 hover:bg-gray-50 text-sm font-medium flex items-center justify-center gap-1"
                   >
                     <Eye className="w-4 h-4" />
                     View
@@ -184,7 +184,7 @@ export const PendingPOSSales = ({
 
                   <button
                     onClick={() => onResumeSale(sale)}
-                    className="py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium flex items-center justify-center gap-2"
+                    className="py-2.5  px-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium flex items-center justify-center gap-1"
                   >
                     <Play className="w-4 h-4" />
                     Resume
@@ -200,7 +200,7 @@ export const PendingPOSSales = ({
                         deleteMutation.mutate(sale.id);
                       }
                     }}
-                    className="py-2.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-sm font-medium flex items-center justify-center gap-2"
+                    className="py-2.5 px-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-sm font-medium flex items-center justify-center gap-1"
                   >
                     <Trash2 className="w-4 h-4" />
                     Cancel

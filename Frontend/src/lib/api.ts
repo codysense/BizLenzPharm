@@ -952,7 +952,7 @@ export const posApi = {
   createPendingSale: (data: CreatePosSaleRequest) =>
     api.post("/pos/pending-sales", data),
   getPendingSales: () => api.get("/pos/pending-sales"),
-  deletePendingSale: (id: string) => api.delete(`/pending-sales/${id}`),
+  deletePendingSale: (id: string) => api.delete(`/pos/pending-sales/${id}`),
   getPOSsalePayments: (saleId: string) =>
     api.get(`/pos/sales/${saleId}/payments`),
   getSales: (params?: {

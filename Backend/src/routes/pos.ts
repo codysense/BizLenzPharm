@@ -72,6 +72,7 @@ router.delete(
     "Senior Accountant",
     "Production Manager",
     "Manager",
+    "POS User",
   ]),
   auditLogger("DELETE", "ITEM"),
   posController.deletePendingSale,
