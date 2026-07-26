@@ -15,6 +15,32 @@ const prisma = new PrismaClient();
 const costingService = new CostingService();
 const glService = new GeneralLedgerService();
 
+interface PendingSaleLineInput {
+  itemId: string;
+  qty: number;
+  unitPrice: number;
+  discountPercent?: number;
+}
+
+interface PendingPaymentInput {
+  method: string;
+  cashAccountId?: string;
+  amount: number;
+}
+
+interface CreatePendingSaleInput {
+  id?: string; // Optional: If updating an existing paused sale
+  sessionId: string;
+  customerId?: string;
+  saleLines: PendingSaleLineInput[];
+  subtotal: number;
+  totalAmount: number;
+  payments: PendingPaymentInput[];
+  totalPaid: number;
+  changeAmount: number;
+  notes?: string;
+}
+
 export class PosController {
   // POS Sessions
   async createSession(req: AuthRequest, res: Response) {
@@ -635,6 +661,13 @@ export class PosController {
               },
             });
 
+            // CLEANUP: If this sale was resumed from a paused sale, delete the paused copy
+            if (input.pendingSaleId) {
+              await tx.pendingPOSSale.deleteMany({
+                where: { id: input.pendingSaleId },
+              });
+            }
+
             const updatedCashAccount = await tx.cashAccount.update({
               where: { id: payment.cashAccountId },
               data: {
@@ -648,7 +681,7 @@ export class PosController {
             });
 
             // Fetch the last CashTransaction ordered by creationDate
-            const lastTx = await prisma.cashTransaction.findFirst({
+            const lastTx = await tx.cashTransaction.findFirst({
               orderBy: { createdAt: "desc" },
             });
 
@@ -1310,75 +1343,138 @@ export class PosController {
     }
   }
 
-  // async getReturns(req: AuthRequest, res: Response) {
-  //   try {
-  //     const {
-  //       page = 1,
-  //       limit = 20,
-  //       sessionId,
-  //       customerId,
-  //       dateFrom,
-  //       dateTo,
-  //     } = req.query;
+  async createPendingSale(req: Request, res: Response) {
+    try {
+      const data: CreatePendingSaleInput = req.body;
 
-  //     const skip = (Number(page) - 1) * Number(limit);
-  //     const take = Number(limit);
+      if (!data.saleLines.length) {
+        return res
+          .status(400)
+          .json({ error: "At least one product is required to pause a sale" });
+      }
 
-  //     const where: any = {};
-  //     if (sessionId) where.sessionId = String(sessionId);
-  //     if (customerId) where.customerId = String(customerId);
-  //     if (dateFrom && dateTo) {
-  //       where.createdAt = {
-  //         gte: new Date(String(dateFrom)),
-  //         lte: new Date(String(dateTo)),
-  //       };
-  //     }
+      const result = await prisma.$transaction(async (tx) => {
+        // If an existing pending sale ID is provided, delete it first (overwrite update)
+        if (data.id) {
+          await tx.pendingPOSSale.deleteMany({
+            where: { id: data.id },
+          });
+        }
 
-  //     const [returns, total] = await Promise.all([
-  //       prisma.posReturn.findMany({
-  //         where,
-  //         skip,
-  //         take,
-  //         orderBy: { createdAt: "desc" },
-  //         include: {
-  //           customer: { select: { id: true, name: true } },
-  //           user: { select: { id: true, name: true } },
-  //           returnLines: {
-  //             include: { item: { select: { id: true, name: true } } },
-  //           },
-  //         },
-  //       }),
-  //       prisma.posReturn.count({ where }),
-  //     ]);
+        // Generate temporary sale number: P-000001 format
+        const count = await tx.pendingPOSSale.count();
+        const saleNo = `P-${String(count + 1).padStart(6, "0")}`;
 
-  //     // 🔑 Transform data: add itemsSummary field
-  //     const transformed = returns.map((ret) => {
-  //       const itemsSummary = ret.returnLines
-  //         .map(
-  //           (line) => `${line.item?.name ?? "Unknown"} (x${line.qtyReturned})`,
-  //         )
-  //         .join(", ");
+        // Create the pending sale header
+        const pendingSale = await tx.pendingPOSSale.create({
+          data: {
+            saleNo,
+            sessionId: data.sessionId,
+            customerId: data.customerId || null,
+            subtotal: data.subtotal,
+            totalAmount: data.totalAmount,
+            totalPaid: data.totalPaid,
+            changeAmount: data.changeAmount,
+            notes: data.notes || null,
+            pendingSaleLines: {
+              create: data.saleLines.map((line) => ({
+                itemId: line.itemId,
+                qty: line.qty,
+                unitPrice: line.unitPrice,
+                discountPercent: line.discountPercent || 0,
+              })),
+            },
+            payments: {
+              create: data.payments.map((p) => ({
+                method: p.method,
+                cashAccountId: p.cashAccountId,
+                amount: p.amount,
+              })),
+            },
+          },
+          include: {
+            pendingSaleLines: {
+              include: { item: true },
+            },
+            // payments: {
+            //   include: { cashAccount: true },
+            // },
+            customer: true,
+          },
+        });
 
-  //       return {
-  //         ...ret,
-  //         itemsSummary,
-  //       };
-  //     });
+        return pendingSale;
+      });
 
-  //     res.json({
-  //       data: transformed,
-  //       pagination: {
-  //         page: Number(page),
-  //         limit: Number(limit),
-  //         total,
-  //         totalPages: Math.ceil(total / Number(limit)),
-  //       },
-  //     });
-  //   } catch (error) {
-  //     console.error("Get POS returns error:", error);
-  //     res.status(500).json({ error: "Failed to fetch POS returns" });
-  //   }
-  // }
+      return res.status(201).json(result);
+    } catch (error) {
+      console.error("Create pending POS sale error:", error);
+      return res.status(500).json({ error: "Failed to pause sale" });
+    }
+  }
+
+  // 2. Fetch all Pending (Paused) Sales
+  async getPendingSales(req: Request, res: Response) {
+    try {
+      const pendingSales = await prisma.pendingPOSSale.findMany({
+        include: {
+          pendingSaleLines: {
+            include: { item: true },
+          },
+          payments: {
+            include: { cashAccount: true },
+          },
+          customer: true,
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      return res.json({ pendingSales });
+    } catch (error) {
+      console.error("Get pending sales error:", error);
+      return res
+        .status(500)
+        .json({ error: "Failed to retrieve pending sales" });
+    }
+  }
+
+  // 3. Delete / Cancel a Pending Sale
+  async deletePendingSale(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+
+      await prisma.pendingPOSSale.delete({
+        where: { id },
+      });
+
+      return res.json({ message: "Pending sale deleted successfully" });
+    } catch (error) {
+      console.error("Delete pending sale error:", error);
+      return res.status(500).json({ error: "Failed to delete pending sale" });
+    }
+  }
+
+  /**
+   * 4. Adapt completed sale (createSale) handler to clean up pending sale on completion.
+   *
+   * In your existing complete POS sale controller (where completed sales are saved),
+   * update the database transaction to delete the pending sale if `pendingSaleId` is supplied:
+   *
+   * async createSale(req: Request, res: Response) {
+   *   const { ..., pendingSaleId } = req.body;
+   *
+   *   await prisma.$transaction(async (tx) => {
+   *     // Create completed POS sale logic here ...
+   *
+   *     // CLEANUP: If this sale was resumed from a paused sale, delete the paused copy
+   *     if (pendingSaleId) {
+   *       await tx.pendingPOSSale.deleteMany({
+   *         where: { id: pendingSaleId }
+   *       });
+   *     }
+   *   });
+   * }
+   */
 
   // Create POS Returns
   async createReturn(req: AuthRequest, res: Response) {

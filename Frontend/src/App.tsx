@@ -79,6 +79,7 @@ import AssetCategories from "./pages/assets/AssetCategories";
 import PosDashboard from "./pages/pos/PosDashboard";
 import PosSalesHistory from "./pages/pos/PosSalesHistory";
 import PosReturnsHistory from "./pages/pos/PosReturnsHistory";
+import PendingPOSSales from "./pages/pos/PendingPOSSales";
 
 //Memo Pages
 import { Memos } from "./pages/memo/Memos";
@@ -419,6 +420,14 @@ function App() {
               element={
                 <ProtectedRoute allowedModules={["pos"]}>
                   <PosSalesHistory />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/pos/pending-sales"
+              element={
+                <ProtectedRoute allowedModules={["pos"]}>
+                  <PendingPOSSales session={null as any} onResumeSale={() => {}} />
                 </ProtectedRoute>
               }
             />

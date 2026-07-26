@@ -80,7 +80,10 @@ const Layout = ({ children }: LayoutProps) => {
       children: [
         { name: "POS Terminal", href: "/pos" },
         { name: "Sales History", href: "/pos/sales" },
+        { name: "Pending Sales History", href: "/pos/pending-sales" },
+
         { name: "Returns", href: "/pos/returns" },
+
         { name: "Stock Register", href: "/inventory/ledger" },
       ],
     },
@@ -100,12 +103,12 @@ const Layout = ({ children }: LayoutProps) => {
       children: [
         { name: "UOMs", href: "/inventory/uoms" },
         { name: "Items", href: "/inventory/items" },
-        { name: "BOMs", href: "/inventory/boms" },
-        { name: "Locations", href: "/inventory/locations" },
+        // { name: "BOMs", href: "/inventory/boms" },
+        // { name: "Locations", href: "/inventory/locations" },
         { name: "Warehouses", href: "/inventory/warehouses" },
         { name: "OpeningStock", href: "/inventory/openingstock" },
         { name: "Import Items", href: "/inventory/import-items" },
-        { name: "Transfers", href: "/inventory/transfers" },
+        // { name: "Transfers", href: "/inventory/transfers" },
         {
           name: "Ledger",
           href: "/inventory/ledger",
@@ -263,7 +266,7 @@ const Layout = ({ children }: LayoutProps) => {
         { name: "Fiscal Calendar", href: "/management/fiscal" },
         { name: "Chart of Accounts", href: "/management/chart-of-accounts" },
         { name: "Cash Accounts", href: "/management/cash-accounts" },
-        { name: "Approval Flows", href: "/management/approvals" },
+        // { name: "Approval Flows", href: "/management/approvals" },
         { name: "Role Management", href: "/management/roles" },
         { name: "User Management", href: "/management/users" },
         { name: "Audit Log", href: "/management/audit-log" },

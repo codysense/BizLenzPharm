@@ -9,10 +9,10 @@ datasource db {
 }
 
 model UserSession {
-  id        String   @id @default(cuid())
-  userId    String
-  createdAt DateTime @default(now())
-  expiresAt DateTime
+  id           String   @id @default(cuid())
+  userId       String
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
   refreshToken String   @unique
 
   user User @relation(fields: [userId], references: [id])
@@ -194,7 +194,7 @@ model Warehouse {
   posSessions       PosSession[]
   productionOrders  ProductionOrder[]
   StockAdjustment   StockAdjustment[]
-  openingStocks OpeningStock[]
+  openingStocks     OpeningStock[]
   users             User[]
   location          Location            @relation(fields: [locationId], references: [id])
 
@@ -244,7 +244,8 @@ model Item {
   saleLines             SaleLine[]
   wipLedgers            WipLedger[]
 
-  openingStockLines OpeningStockLine[]
+  openingStockLines  OpeningStockLine[]
+  PendingPOSSaleLine PendingPOSSaleLine[]
 
   @@map("items")
 }
@@ -502,6 +503,7 @@ model Customer {
   sales            Sale[]
   salesReceipts    SalesReceipt[]
   SalesRefund      SalesRefund[]
+  PendingPOSSale   PendingPOSSale[]
 
   @@map("customers")
 }
@@ -672,30 +674,31 @@ model AuditLog {
 }
 
 model CashAccount {
-  id               String            @id @default(cuid())
-  code             String            @unique
-  name             String
-  accountType      String
-  accountNumber    String?
-  bankName         String?
-  balance          Decimal           @default(0) @db.Decimal(15, 2)
-  isActive         Boolean           @default(true)
-  createdAt        DateTime          @default(now())
-  glAccountId      String?
-  chartOfAccountId String?
-  warehouseId      String?
-  chartOfAccount   ChartOfAccount?   @relation("CashAccountGLAccount", fields: [chartOfAccountId], references: [id])
-  warehouse        Warehouse?        @relation(fields: [warehouseId], references: [id])
-  cashTransactions CashTransaction[]
-  customerPayments CustomerPayment[]
-  posSales         PosSale[]
-  posSessions      PosSession[]
-  purchasePayments PurchasePayment[]
-  PurchaseRefund   PurchaseRefund[]
-  salesReceipts    SalesReceipt[]
-  SalesRefund      SalesRefund[]
-  vendorPayments   VendorPayment[]
-  posSalePayments  PosSalePayment[]
+  id                String              @id @default(cuid())
+  code              String              @unique
+  name              String
+  accountType       String
+  accountNumber     String?
+  bankName          String?
+  balance           Decimal             @default(0) @db.Decimal(15, 2)
+  isActive          Boolean             @default(true)
+  createdAt         DateTime            @default(now())
+  glAccountId       String?
+  chartOfAccountId  String?
+  warehouseId       String?
+  chartOfAccount    ChartOfAccount?     @relation("CashAccountGLAccount", fields: [chartOfAccountId], references: [id])
+  warehouse         Warehouse?          @relation(fields: [warehouseId], references: [id])
+  cashTransactions  CashTransaction[]
+  customerPayments  CustomerPayment[]
+  posSales          PosSale[]
+  posSessions       PosSession[]
+  purchasePayments  PurchasePayment[]
+  PurchaseRefund    PurchaseRefund[]
+  salesReceipts     SalesReceipt[]
+  SalesRefund       SalesRefund[]
+  vendorPayments    VendorPayment[]
+  posSalePayments   PosSalePayment[]
+  PendingPOSPayment PendingPOSPayment[]
 
   @@map("cash_accounts")
 }
@@ -1267,6 +1270,53 @@ enum PosPaymentMethod {
   TRANSFER
 }
 
+model PendingPOSSale {
+  id           String   @id @default(cuid())
+  saleNo       String   @unique // Auto-generated temporary number, e.g., P-0001
+  sessionId    String
+  customerId   String?
+  subtotal     Decimal  @db.Decimal(15, 4)
+  totalAmount  Decimal  @db.Decimal(15, 4)
+  totalPaid    Decimal  @db.Decimal(15, 4)
+  changeAmount Decimal  @db.Decimal(15, 4)
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  pendingSaleLines PendingPOSSaleLine[]
+  payments         PendingPOSPayment[]
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@map("pending_pos_sales")
+}
+
+model PendingPOSSaleLine {
+  id              String         @id @default(cuid())
+  pendingSaleId   String
+  itemId          String
+  qty             Decimal        @db.Decimal(15, 4)
+  unitPrice       Decimal        @db.Decimal(15, 4)
+  discountPercent Decimal        @default(0) @db.Decimal(15, 4)
+  pendingSale     PendingPOSSale @relation(fields: [pendingSaleId], references: [id], onDelete: Cascade)
+  item            Item           @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@map("pending_pos_sale_lines")
+}
+
+model PendingPOSPayment {
+  id            String         @id @default(cuid())
+  pendingSaleId String
+  method        String // CASH, CARD, TRANSFER
+  cashAccountId String?
+  amount        Decimal        @db.Decimal(15, 4)
+  pendingSale   PendingPOSSale @relation(fields: [pendingSaleId], references: [id], onDelete: Cascade)
+  cashAccount   CashAccount?    @relation(fields: [cashAccountId], references: [id], onDelete: Cascade)
+
+  @@map("pending_pos_payments")
+}
+
 model PosSale {
   id            String  @id @default(cuid())
   saleNo        String  @unique
@@ -1465,20 +1515,20 @@ model AdjustmentLines {
 }
 
 model OpeningStock {
-  id           String    @id @default(cuid())
-  referenceNo  String    @unique
-  warehouseId  String
-  openingDate  DateTime
-  remarks      String?
+  id          String   @id @default(cuid())
+  referenceNo String   @unique
+  warehouseId String
+  openingDate DateTime
+  remarks     String?
 
-  totalQty     Decimal   @db.Decimal(15, 4)
-  totalValue   Decimal   @db.Decimal(15, 4)
+  totalQty   Decimal @db.Decimal(15, 4)
+  totalValue Decimal @db.Decimal(15, 4)
 
-  createdById  String
-  createdAt    DateTime  @default(now())
+  createdById String
+  createdAt   DateTime @default(now())
 
-  warehouse    Warehouse @relation(fields: [warehouseId], references: [id])
-  createdBy    User      @relation(fields: [createdById], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  createdBy User      @relation(fields: [createdById], references: [id])
 
   openingLines OpeningStockLine[]
 
@@ -1486,17 +1536,17 @@ model OpeningStock {
 }
 
 model OpeningStockLine {
-  id              String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  openingStockId  String
-  itemId          String
+  openingStockId String
+  itemId         String
 
-  qty             Decimal  @db.Decimal(15, 4)
-  unitCost        Decimal  @db.Decimal(15, 4)
-  lineTotal       Decimal  @db.Decimal(15, 4)
+  qty       Decimal @db.Decimal(15, 4)
+  unitCost  Decimal @db.Decimal(15, 4)
+  lineTotal Decimal @db.Decimal(15, 4)
 
-  openingStock    OpeningStock @relation(fields: [openingStockId], references: [id])
-  item            Item         @relation(fields: [itemId], references: [id])
+  openingStock OpeningStock @relation(fields: [openingStockId], references: [id])
+  item         Item         @relation(fields: [itemId], references: [id])
 
   @@map("opening_stock_lines")
 }

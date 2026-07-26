@@ -1,46 +1,18 @@
-//New workflow layout
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import {
-  X,
-  Plus,
-  Trash2,
-  ShoppingCart,
-  Calculator,
-  Printer,
-  User,
-} from "lucide-react";
+import { X, Trash2, Calculator, Pause } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { posApi, inventoryApi, managementApi, cashApi } from "../../lib/api";
 import { PosSession } from "../../types/api";
-// import { ReportExporter } from "../../utils/reportExport";
 import toast from "react-hot-toast";
 import { ItemSelect } from "../../components/ItemSelect";
 import { CustomerSelect } from "../../components/CustomerSelect";
 
-// const posSaleSchema = z.object({
-//   customerId: z.string().optional(),
-//   cashAccountId: z.string().cuid(),
-//   saleLines: z
-//     .array(
-//       z.object({
-//         itemId: z.string().min(1, "Item is required"),
-//         qty: z.number().positive("Quantity must be positive"),
-//         unitPrice: z.number().positive("Unit price must be positive"),
-//         discountPercent: z.number().min(0).max(100).default(0),
-//       }),
-//     )
-//     .min(1, "At least one item is required"),
-//   paymentMethod: z.enum(["CASH", "CARD", "TRANSFER"]),
-//   amountPaid: z.number().positive("Amount paid must be positive"),
-//   notes: z.string().optional(),
-// });
-
 const paymentSchema = z.object({
   method: z.enum(["CASH", "TRANSFER", "CARD"]),
-  cashAccountId: z.string().cuid(),
+  cashAccountId: z.string().cuid().optional(),
   amount: z.number().positive("Amount must be positive"),
 });
 
@@ -64,15 +36,16 @@ interface PosTerminalProps {
   session: PosSession;
   onClose: () => void;
   onSaleComplete: () => void;
+  resumedSale?: any;
 }
 
 const PosTerminal = ({
   session,
   onClose,
   onSaleComplete,
+  resumedSale,
 }: PosTerminalProps) => {
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
-
   const [itemStocks, setItemStocks] = useState<Record<string, number>>({});
   const [entryQty, setEntryQty] = useState(1);
   const [selectedItemId, setSelectedItemId] = useState("");
@@ -96,21 +69,10 @@ const PosTerminal = ({
       saleLines: [],
       payments: [{ method: "CASH", cashAccountId: "", amount: 0 }],
     },
-
-    // defaultValues: {
-    //   saleLines: [{ itemId: "", qty: 1, unitPrice: 0, discountPercent: 0 }],
-    // },
   });
-
-  // const { fields, append, remove } = useFieldArray({
-  //   control,
-  //   name: "payments",
-  //   // name: "saleLines",
-  // });
 
   const { fields, append, remove } = useFieldArray({
     control,
-
     name: "saleLines",
   });
 
@@ -123,22 +85,47 @@ const PosTerminal = ({
     name: "payments",
   });
 
-  // const watchedLines = watch("saleLines");
   const watchedCustomerId = watch("customerId");
-  // const watchedAmountPaid = watch("amountPaid") || 0;
   const watchedLines = watch("saleLines");
   const watchedPayments = watch("payments") || [];
-  const watchedItemIds = watchedLines.map((line) => line.itemId);
 
   const { data: items } = useQuery({
     queryKey: ["pos-itemss", "FINISHED_GOODS"],
-    queryFn: () =>
-      inventoryApi.getItems({ type: "FINISHED_GOODS", limit: 100 }),
+    queryFn: () => inventoryApi.getItems({ type: "FINISHED_GOODS", limit: 50 }),
   });
 
   const itemMap = useMemo(() => {
     return new Map((items?.items ?? []).map((item: any) => [item.id, item]));
   }, [items]);
+
+  // Load Resumed Sale Data if passed
+  useEffect(() => {
+    if (resumedSale) {
+      reset({
+        customerId: resumedSale.customerId || undefined,
+        saleLines:
+          resumedSale.pendingSaleLines?.map((line: any) => ({
+            itemId: line.itemId,
+            qty: Number(line.qty),
+            unitPrice: Number(line.unitPrice),
+            discountPercent: Number(line.discountPercent || 0),
+          })) || [],
+        payments: resumedSale.payments?.map((pay: any) => ({
+          method: pay.method,
+          cashAccountId: pay.cashAccountId,
+          amount: Number(pay.amount),
+        })) || [{ method: "CASH", cashAccountId: "", amount: 0 }],
+        notes: resumedSale.notes || "",
+      });
+
+      if (resumedSale.customerId) {
+        const customer = customersWithBalances?.customers?.find(
+          (c: any) => c.id === resumedSale.customerId,
+        );
+        setSelectedCustomer(customer || null);
+      }
+    }
+  }, [resumedSale, reset]);
 
   useEffect(() => {
     const itemIds = Array.from(
@@ -161,12 +148,9 @@ const PosTerminal = ({
       for (const id of missingIds) {
         try {
           const selectedItem = await inventoryApi.getItemById(id);
-
           if (isCancelled) return;
-
           const name = selectedItem?.name ?? "";
           itemNameCacheRef.current[id] = name;
-
           setItemNamesById((prev) =>
             prev[id] === name ? prev : { ...prev, [id]: name },
           );
@@ -185,7 +169,6 @@ const PosTerminal = ({
 
   const getItemName = (itemId: string) => {
     if (!itemId) return "";
-
     return (
       itemNamesById[itemId] ??
       itemNameCacheRef.current[itemId] ??
@@ -213,33 +196,26 @@ const PosTerminal = ({
     (account: any) => account.name !== "Memo Clearing",
   );
 
-  //Update Product price for a customer
+  // Update Product price for a customer
   useEffect(() => {
     const setPrices = async () => {
-      //if (!selectedCustomer) return;
-
       for (let index = 0; index < watchedLines.length; index++) {
         const line = watchedLines[index];
         if (!line.itemId) continue;
 
         try {
           const selectedItem = await inventoryApi.getItemById(line.itemId);
-
-          // Save stockQty
           setItemStocks((prev) => ({
             ...prev,
             [line.itemId]: selectedItem.stockQty || 0,
           }));
 
           if (selectedCustomer && selectedItem) {
-            const customerGroup = selectedCustomer.customerGroupName;
-
             const groupPrice = selectedItem.priceList?.find(
               (p: any) =>
                 (p.customerGroup || "").trim() ===
                 (selectedCustomer?.customerGroupName || "").trim(),
             );
-
             const unitPrice = groupPrice
               ? groupPrice.price
               : selectedItem.defaultPrice || 0;
@@ -248,8 +224,6 @@ const PosTerminal = ({
               shouldDirty: true,
               shouldValidate: true,
             });
-          } else {
-            setValue(`saleLines.${index}.unitPrice`, 0);
           }
         } catch (err) {
           console.error("Failed to fetch item price", err);
@@ -264,7 +238,6 @@ const PosTerminal = ({
     selectedCustomer,
   ]);
 
-  //
   useEffect(() => {
     if (watchedCustomerId) {
       const customer = customersWithBalances?.customers?.find(
@@ -296,22 +269,19 @@ const PosTerminal = ({
       return sum + (lineTotal - discount);
     }, 0);
 
-    const taxAmount = 0; // Can be configured later
+    const taxAmount = 0;
     const discountAmount = watchedLines.reduce((sum, line) => {
       const lineTotal = (line.qty || 0) * (line.unitPrice || 0);
       return sum + (lineTotal * (line.discountPercent || 0)) / 100;
     }, 0);
 
     const totalAmount = subtotal + taxAmount;
-    const changeAmount = Math.max(0, watchedPayments - totalAmount);
-
-    return { subtotal, taxAmount, discountAmount, totalAmount, changeAmount };
+    return { subtotal, taxAmount, discountAmount, totalAmount };
   };
 
-  // const { subtotal, taxAmount, discountAmount, totalAmount, changeAmount } =
-  //   calculateTotals();
   const { discountAmount, totalAmount } = calculateTotals();
 
+  // Complete and commit POS sale
   const onSubmit = async (data: PosSaleFormData) => {
     try {
       if (!data.saleLines.length) {
@@ -324,12 +294,12 @@ const PosTerminal = ({
           toast.error("Quantity must be greater than zero");
           return;
         }
-
         if (line.unitPrice < 0) {
           toast.error("Unit price must be greater than zero");
           return;
         }
       }
+
       const result = await posApi.createSale({
         sessionId: session.id,
         customerId: data.customerId,
@@ -342,12 +312,11 @@ const PosTerminal = ({
         totalPaid,
         changeAmount,
         notes: data.notes,
+        pendingSaleId: resumedSale?.id,
       });
-      // console.log("POS Sale result:", result.id);
 
       await handlePrintReceipt(result.id);
-
-      toast.success("Sale completed");
+      toast.success("Sale completed successfully");
       onSaleComplete();
     } catch (err) {
       console.error("POS Sale error:", err);
@@ -355,11 +324,45 @@ const PosTerminal = ({
     }
   };
 
+  // Pause Sale Handler
+  const handlePauseSale = async () => {
+    try {
+      const data = getValues();
+      const validLines = (data.saleLines || []).filter(
+        (line) => line.itemId && line.itemId.trim() !== "",
+      );
+
+      if (!validLines.length) {
+        toast.error("Please add at least one product before pausing");
+        return;
+      }
+
+      await posApi.createPendingSale({
+        id: resumedSale?.id,
+        sessionId: session.id,
+        customerId: data.customerId,
+        saleLines: validLines,
+        subtotal,
+        totalAmount: totalAmount,
+        payments: data.payments,
+        totalPaid,
+        changeAmount,
+        notes: data.notes,
+      });
+
+      toast.success("Sale paused successfully");
+      onSaleComplete();
+      onClose();
+    } catch (err) {
+      console.error("Pause sale error:", err);
+      toast.error("Failed to pause sale");
+    }
+  };
+
   const handlePrintReceipt = async (saleId: string) => {
     try {
       const printData = await posApi.printReceipt(saleId);
-      console.log("Print data:", printData);
-      const printerWidth = localStorage.getItem("printerWidth") || "80"; // default to 80mm
+      const printerWidth = localStorage.getItem("printerWidth") || "80";
       const paperWidth = `${printerWidth}mm`;
 
       const printWindow = window.open("", "_blank", "width=400,height=600");
@@ -370,60 +373,16 @@ const PosTerminal = ({
         <head>
           <title>Receipt - ${printData.documentNo}</title>
           <style>
-            @page {
-              size: ${paperWidth} auto;
-              margin: 0;
-            }
-
-            body {
-              font-family: Arial, sans-serif;
-              width: ${paperWidth};
-              padding: 5mm;
-              margin: 0;
-            }
-
-            h1, h2 {
-              margin: 5px 0;
-              font-size: 14px;
-              text-align: center;
-            }
-
-            table {
-              width: 100%;
-              font-size: 11px;
-              border-collapse: collapse;
-              margin-bottom: 10px;
-            }
-
-            th, td {
-              padding: 2px;
-            }
-
-            th {
-              border-bottom: 1px solid #000;
-              text-align: left;
-            }
-
-            td {
-              text-align: right;
-            }
-
-            td:first-child {
-              text-align: left;
-            }
-
-            .totals {
-              border-top: 1px solid #000;
-              padding-top: 5px;
-              font-size: 12px;
-            }
-
-            .footer {
-              text-align: center;
-              margin-top: 20px;
-              font-size: 10px;
-              color: #666;
-            }
+            @page { size: ${paperWidth} auto; margin: 0; }
+            body { font-family: Arial, sans-serif; width: ${paperWidth}; padding: 5mm; margin: 0; }
+            h1, h2 { margin: 5px 0; font-size: 14px; text-align: center; }
+            table { width: 100%; font-size: 11px; border-collapse: collapse; margin-bottom: 10px; }
+            th, td { padding: 2px; }
+            th { border-bottom: 1px solid #000; text-align: left; }
+            td { text-align: right; }
+            td:first-child { text-align: left; }
+            .totals { border-top: 1px solid #000; padding-top: 5px; font-size: 12px; }
+            .footer { text-align: center; margin-top: 20px; font-size: 10px; color: #666; }
           </style>
         </head>
         <body>
@@ -437,92 +396,26 @@ const PosTerminal = ({
             <h2>${printData.documentNo}</h2>
             <p>${new Date(printData.date).toLocaleString()}</p>
           </div>
-
-          ${
-            printData.customer
-              ? `
-            <div style="margin-bottom: 10px; font-size: 12px;">
-              <strong>Customer:</strong> ${printData.customer.name}<br>
-              <strong>Code:</strong> ${printData.customer.code}
-            </div>
-          `
-              : ""
-          }
-
+          ${printData.customer ? `<div style="margin-bottom: 10px; font-size: 12px;"><strong>Customer:</strong> ${printData.customer.name}<br><strong>Code:</strong> ${printData.customer.code}</div>` : ""}
           <table>
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th>Qty</th>
-                <th>Price</th>
-                <th>Total</th>
-              </tr>
-            </thead>
+            <thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
             <tbody>
-              ${printData.items
-                .map(
-                  (item: any) => `
-                <tr>
-                  <td>${item.name}</td>
-                  <td>${item.qty}</td>
-                  <td>₦${item.unitPrice.toLocaleString()}</td>
-                  <td>₦${item.lineTotal.toLocaleString()}</td>
-                </tr>
-              `,
-                )
-                .join("")}
+              ${printData.items.map((item: any) => `<tr><td>${item.name}</td><td>${item.qty}</td><td>₦${item.unitPrice.toLocaleString()}</td><td>₦${item.lineTotal.toLocaleString()}</td></tr>`).join("")}
             </tbody>
           </table>
-
           <div class="totals">
-            <div style="display: flex; justify-content: space-between;">
-              <span>Subtotal:</span> <span>₦${printData.totals.subtotal.toLocaleString()}</span>
-            </div>
-            ${
-              printData.totals.discountAmount > 0
-                ? `
-              <div style="display: flex; justify-content: space-between;">
-                <span>Discount:</span> <span>-₦${printData.totals.discountAmount.toLocaleString()}</span>
-              </div>
-            `
-                : ""
-            }
-            <div style="display: flex; justify-content: space-between; font-weight: bold;">
-              <span>Total:</span> <span>₦${printData.totals.totalAmount.toLocaleString()}</span>
-            </div>
-             ${
-               printData.payments
-                 ?.map(
-                   (payment: any) => `
-              <div style="display: flex; justify-content: space-between;">
-                <span>Paid (${payment.method}):</span>
-                <span>₦${payment.amount.toLocaleString()}</span>
-              </div>
-            `,
-                 )
-                 .join("") || ""
-             }
-            <div style="display: flex; justify-content: space-between;">
-              <span>Change:</span>
-              <span>₦${printData.totals.changeAmount.toLocaleString()}</span>
-            </div>
+            <div style="display: flex; justify-content: space-between;"><span>Subtotal:</span> <span>₦${printData.totals.subtotal.toLocaleString()}</span></div>
+            ${printData.totals.discountAmount > 0 ? `<div style="display: flex; justify-content: space-between;"><span>Discount:</span> <span>-₦${printData.totals.discountAmount.toLocaleString()}</span></div>` : ""}
+            <div style="display: flex; justify-content: space-between; font-weight: bold;"><span>Total:</span> <span>₦${printData.totals.totalAmount.toLocaleString()}</span></div>
+            ${printData.payments?.map((payment: any) => `<div style="display: flex; justify-content: space-between;"><span>Paid (${payment.method}):</span><span>₦${payment.amount.toLocaleString()}</span></div>`).join("") || ""}
+            <div style="display: flex; justify-content: space-between;"><span>Change:</span><span>₦${printData.totals.changeAmount.toLocaleString()}</span></div>
           </div>
-
-          <div class="footer">
-            Cashier: ${printData.cashier.name}<br>
-            Thank you for your business!<br>
-            Bizlens Accounting Software-08033124491
-          </div>
-
+          <div class="footer">Cashier: ${printData.cashier.name}<br>Thank you for your business!<br>Bizlens Accounting Software-08033124491</div>
           <script>
-            window.onload = function() {
-              window.print();
-              window.onafterprint = function() { window.close(); };
-            }
+            window.onload = function() { window.print(); window.onafterprint = function() { window.close(); }; }
           </script>
         </body>
-      </html>
-    `;
+      </html>`;
 
       printWindow.document.open();
       printWindow.document.write(receiptHTML);
@@ -532,72 +425,58 @@ const PosTerminal = ({
     }
   };
 
-  //auto fill with walk-in customer
+  // auto fill with walk-in customer
   useEffect(() => {
     if (!customersWithBalances?.customers?.length) return;
-
     const walkInCustomer = customersWithBalances.customers.find(
       (c: any) => c.name?.toLowerCase() === "walk-in customer",
     );
-
     if (walkInCustomer && !getValues("customerId")) {
       setValue("customerId", walkInCustomer.id);
-
       setSelectedCustomer(walkInCustomer);
     }
   }, [customersWithBalances, getValues, setValue]);
 
-  //Merge quantity for already added item
   const addItemToSale = (itemId: string, qty: number, discountPercent = 0) => {
     const existingIndex = watchedLines.findIndex(
       (line) => line.itemId === itemId,
     );
-
     if (existingIndex >= 0) {
       const currentQty = getValues(`saleLines.${existingIndex}.qty`);
-
       setValue(`saleLines.${existingIndex}.qty`, currentQty + qty, {
         shouldDirty: true,
         shouldValidate: true,
       });
       toast.success(`${getItemName(itemId)} quantity increased`);
-
       return;
     }
-
-    append({
-      itemId,
-      qty,
-      unitPrice: 0,
-      discountPercent,
-    });
+    append({ itemId, qty, unitPrice: 0, discountPercent });
   };
 
-  // handle item select
   const handleItemSelected = (itemId: string) => {
     if (!itemId) return;
-
     addItemToSale(itemId, entryQty);
-
     setEntryQty(1);
-
     setSelectedItemId("");
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
-      <div className="h-screen w-screen flex items-center justify-center p-4">
-        <div className="w-full max-w-7xl h-[95vh] bg-white rounded-3xl border border-gray-200 shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm overflow-y-auto lg:overflow-hidden">
+      <div className="min-h-screen w-screen flex items-center justify-center p-0 sm:p-4">
+        <div className="w-full max-w-7xl h-screen sm:h-[95vh] bg-white rounded-none sm:rounded-3xl border border-gray-200 shadow-2xl overflow-hidden flex flex-col">
           {/* HEADER */}
-          <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between bg-white">
+          <div className="px-4 py-4 sm:px-6 sm:py-5 border-b border-gray-200 flex items-center justify-between bg-white">
             <div>
-              <h2 className="text-2xl font-bold text-gray-900">New Sale</h2>
-              <p className="text-gray-500 text-sm">
-                Session #{session.sessionNo}
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
+                New Sale
+              </h2>
+              <p className="text-gray-500 text-xs sm:text-sm">
+                Session #{session.sessionNo}{" "}
+                {resumedSale ? `(Resumed ${resumedSale.saleNo})` : ""}
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <button
                 type="button"
                 className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600"
@@ -605,11 +484,14 @@ const PosTerminal = ({
                 <Calculator className="w-5 h-5" />
               </button>
 
+              {/* PAUSE BUTTON */}
               <button
                 type="button"
-                className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600"
+                onClick={handlePauseSale}
+                className="p-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-600 border border-amber-200"
+                title="Pause Sale"
               >
-                <Printer className="w-5 h-5" />
+                <Pause className="w-5 h-5" />
               </button>
 
               <button
@@ -623,27 +505,24 @@ const PosTerminal = ({
 
           <form
             onSubmit={handleSubmit(onSubmit)}
-            className="flex-1 overflow-hidden flex"
+            className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden bg-gray-50"
           >
-            {/* LEFT SECTION */}
-            <div className="w-2/3 border-r border-gray-200 flex flex-col bg-gray-50">
+            {/* LEFT SECTION (Main workspace - items, inputs) */}
+            <div className="w-full lg:w-2/3 border-b lg:border-b-0 lg:border-r border-gray-200 flex flex-col bg-gray-50">
               {/* CUSTOMER + NOTES */}
-              <div className="p-5 border-b border-gray-200 grid grid-cols-2 gap-4 bg-white">
+              <div className="p-4 sm:p-5 border-b border-gray-200 grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white">
                 <div>
-                  <label className="block text-sm text-gray-600 mb-2">
+                  <label className="block text-sm text-gray-600 mb-1.5 font-medium">
                     Customer
                   </label>
-
                   <CustomerSelect
                     customers={customersWithBalances?.customers || []}
                     value={watch("customerId")}
                     onChange={(val) => {
                       setValue("customerId", val);
-
                       const customer = customersWithBalances?.customers?.find(
                         (c: any) => c.id === val,
                       );
-
                       setSelectedCustomer(customer || null);
                     }}
                     error={errors.customerId?.message}
@@ -651,124 +530,145 @@ const PosTerminal = ({
                 </div>
 
                 <div>
-                  <label className="block text-sm text-gray-600 mb-2">
+                  <label className="block text-sm text-gray-600 mb-1.5 font-medium">
                     Notes
                   </label>
                   <textarea
                     {...register("notes")}
                     rows={2}
-                    className="w-full bg-white border border-gray-300 rounded-xl px-4 py-3 text-gray-900 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                    className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
                     placeholder="Optional sale notes"
                   />
                 </div>
               </div>
-              {/* Item Entry panel */}
-              <div className="bg-white border-b border-gray-200 p-5">
-                <h3 className="font-semibold text-gray-900 mb-4">Add Item</h3>
 
-                <div className="grid grid-cols-4 gap-4">
-                  <div>
-                    <label className="block text-sm text-gray-600 mb-2">
+              {/* Item Entry Panel */}
+              <div className="bg-white border-b border-gray-200 p-4 sm:p-5">
+                <div className="flex justify-between">
+                  <h3 className="font-semibold text-gray-900 mb-3 text-sm sm:text-base">
+                    Add Item
+                  </h3>
+
+                  <p className="text-gray-600 font-semibold">
+                    {fields.length > 0 ? fields.length + " items added" : ""}
+                  </p>
+                </div>
+                <div className="grid grid-cols-4 gap-3 sm:gap-4">
+                  <div className="col-span-1">
+                    <label className="block text-xs sm:text-sm text-gray-600 mb-1.5 font-medium">
                       Qty
                     </label>
-
                     <input
                       type="number"
-                      min={1}
+                      //min={0}
                       value={entryQty}
                       onChange={(e) => setEntryQty(Number(e.target.value) || 1)}
-                      className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-gray-900"
+                      className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 focus:ring-2 focus:ring-emerald-500 outline-none"
                     />
                   </div>
-
                   <div className="col-span-3">
-                    <label>Search Item</label>
-
+                    <label className="block text-xs sm:text-sm text-gray-600 mb-1.5 font-medium">
+                      Search Item
+                    </label>
                     <ItemSelect
                       noZeroItem
-                      value={selectedItemId}
+                      value={selectedItemId.trim()}
                       typeFilter="FINISHED_GOODS"
                       onChange={handleItemSelected}
                     />
                   </div>
                 </div>
               </div>
-              {/* ITEMS */}
-              <div className="flex-1 overflow-y-auto p-5 space-y-4">
+
+              {/* ITEMS SCROLL AREA */}
+              <div className="flex-1 overflow-y-visible lg:overflow-y-auto p-4 sm:p-5 space-y-4">
                 {fields.map((field, index) => (
                   <div
                     key={field.id}
                     className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm"
                   >
-                    <div className="grid grid-cols-7 gap-4 items-end">
-                      {/* ITEM */}
-                      <div className="col-span-3">
-                        <label className="text-sm text-gray-600 block mb-2">
-                          Item
-                        </label>
-
-                        <div className="w-full bg-gray-100 border border-gray-300 rounded-xl px-3 py-2">
-                          {getItemName(watchedLines[index].itemId)}
+                    <div className="flex flex-col gap-3 sm:grid sm:grid-cols-7 sm:gap-4 sm:items-end">
+                      {/* ITEM NAME */}
+                      <div className="flex justify-between items-center sm:col-span-3">
+                        <div className="w-full">
+                          <label className="text-xs sm:text-sm text-gray-600 block mb-1 font-medium sm:hidden">
+                            Item
+                          </label>
+                          <div className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-800 font-medium">
+                            {getItemName(watchedLines[index].itemId)}
+                          </div>
                         </div>
-                      </div>
-
-                      {/* QTY */}
-                      <div>
-                        <label className="text-sm text-gray-600 block mb-2">
-                          Qty
-                        </label>
-                        <input
-                          {...register(`saleLines.${index}.qty`, {
-                            valueAsNumber: true,
-                          })}
-                          type="number"
-                          className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-gray-900"
-                        />
-                      </div>
-
-                      {/* PRICE */}
-                      <div>
-                        <label className="text-sm text-gray-600 block mb-2">
-                          Price
-                        </label>
-                        <input
-                          {...register(`saleLines.${index}.unitPrice`, {
-                            valueAsNumber: true,
-                          })}
-                          className="w-full bg-gray-100 border border-gray-200 rounded-xl px-3 py-2 text-gray-700"
-                        />
-                      </div>
-
-                      {/* DISCOUNT */}
-                      <div>
-                        <label className="text-sm text-gray-600 block mb-2">
-                          Discount %
-                        </label>
-                        <input
-                          {...register(`saleLines.${index}.discountPercent`, {
-                            valueAsNumber: true,
-                          })}
-                          type="number"
-                          className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-gray-900"
-                        />
-                      </div>
-
-                      {/* REMOVE */}
-                      <div className="flex justify-end">
-                        {fields.length > 1 && (
+                        {/* Mobile Remove Button */}
+                        <div className="sm:hidden ml-2 pt-5">
+                          {/* {fields.length > 0 && ( */}
                           <button
                             type="button"
                             onClick={() => remove(index)}
-                            className="p-2 bg-red-100 rounded-xl text-red-600 hover:bg-red-500 hover:text-white"
+                            className="p-2.5 bg-red-100 rounded-xl text-red-600 hover:bg-red-500 hover:text-white transition"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="w-5 h-5" />
                           </button>
-                        )}
+                          {/* )} */}
+                        </div>
+                      </div>
+
+                      {/* QTY, PRICE, DISCOUNT IN 3 COLUMNS ON MOBILE */}
+                      <div className="grid grid-cols-3 gap-2 sm:contents">
+                        <div>
+                          <label className="text-xs sm:text-sm text-gray-600 block mb-1 font-medium">
+                            Qty
+                          </label>
+                          <input
+                            {...register(`saleLines.${index}.qty`, {
+                              valueAsNumber: true,
+                            })}
+                            type="number"
+                            className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 focus:ring-2 focus:ring-emerald-500 outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-xs sm:text-sm text-gray-600 block mb-1 font-medium">
+                            Price
+                          </label>
+                          <input
+                            {...register(`saleLines.${index}.unitPrice`, {
+                              valueAsNumber: true,
+                            })}
+                            className="w-full bg-gray-100 border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-xs sm:text-sm text-gray-600 block mb-1 font-medium">
+                            Discount %
+                          </label>
+                          <input
+                            {...register(`saleLines.${index}.discountPercent`, {
+                              valueAsNumber: true,
+                            })}
+                            type="number"
+                            className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 focus:ring-2 focus:ring-emerald-500 outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Desktop Remove Button */}
+                      <div className="hidden sm:flex sm:justify-end sm:col-span-1">
+                        {/* {fields.length > 1 && ( */}
+                        <button
+                          type="button"
+                          onClick={() => remove(index)}
+                          className="p-2.5 bg-red-100 rounded-xl text-red-600 hover:bg-red-500 hover:text-white transition"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                        {/* )} */}
                       </div>
                     </div>
 
                     {/* LINE TOTAL */}
-                    <div className="mt-4 flex justify-between text-sm">
+                    <div className="mt-3.5 pt-3 border-t border-gray-100 flex justify-between text-xs sm:text-sm">
                       <span className="text-gray-500">Line Total</span>
                       <span className="text-emerald-600 font-semibold">
                         ₦
@@ -776,12 +676,10 @@ const PosTerminal = ({
                           const lineTotal =
                             (watchedLines[index]?.qty || 0) *
                             (watchedLines[index]?.unitPrice || 0);
-
                           const discount =
                             (lineTotal *
                               (watchedLines[index]?.discountPercent || 0)) /
                             100;
-
                           return (lineTotal - discount).toLocaleString();
                         })()}
                       </span>
@@ -789,33 +687,15 @@ const PosTerminal = ({
                   </div>
                 ))}
               </div>
-
-              {/* ADD ITEM */}
-              {/* <div className="p-5 border-t border-gray-200 bg-white">
-                <button
-                  type="button"
-                  onClick={() =>
-                    append({
-                      itemId: "",
-                      qty: 1,
-                      unitPrice: 0,
-                      discountPercent: 0,
-                    })
-                  }
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-2xl font-medium flex items-center justify-center"
-                >
-                  <Plus className="w-5 h-5 mr-2" />
-                  Add Product
-                </button>
-              </div> */}
             </div>
 
-            {/* RIGHT SECTION */}
-            <div className="w-1/3 bg-white flex flex-col p-5 space-y-5 overflow-y-auto">
+            {/* RIGHT SECTION (Summary & Payment details) */}
+            <div className="w-full lg:w-1/3 bg-white flex flex-col p-4 sm:p-5 space-y-5 overflow-y-visible lg:overflow-y-auto">
               {/* PAYMENTS */}
-              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-5">
-                <h3 className="text-gray-900 font-semibold mb-4">Payments</h3>
-
+              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 sm:p-5">
+                <h3 className="text-gray-900 font-semibold mb-4 text-sm sm:text-base">
+                  Payments
+                </h3>
                 <div className="space-y-4">
                   {paymentFields.map((field, index) => (
                     <div
@@ -824,7 +704,7 @@ const PosTerminal = ({
                     >
                       <select
                         {...register(`payments.${index}.method`)}
-                        className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-gray-900"
+                        className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 focus:ring-2 focus:ring-emerald-500 outline-none"
                       >
                         <option value="CASH">Cash</option>
                         <option value="TRANSFER">Transfer</option>
@@ -833,7 +713,7 @@ const PosTerminal = ({
 
                       <select
                         {...register(`payments.${index}.cashAccountId`)}
-                        className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-gray-900"
+                        className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 focus:ring-2 focus:ring-emerald-500 outline-none"
                       >
                         <option value="">Select Account</option>
                         {filteredAccounts?.map((acc: any) => (
@@ -849,14 +729,14 @@ const PosTerminal = ({
                         })}
                         type="number"
                         placeholder="Amount"
-                        className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-gray-900"
+                        className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 focus:ring-2 focus:ring-emerald-500 outline-none"
                       />
 
                       {paymentFields.length > 1 && (
                         <button
                           type="button"
                           onClick={() => removePayment(index)}
-                          className="text-red-500 text-sm"
+                          className="text-red-500 text-xs sm:text-sm font-medium hover:underline"
                         >
                           Remove payment
                         </button>
@@ -874,7 +754,7 @@ const PosTerminal = ({
                       amount: 0,
                     })
                   }
-                  className="mt-4 text-emerald-600 text-sm"
+                  className="mt-3 text-emerald-600 text-xs sm:text-sm font-semibold hover:underline"
                 >
                   + Add Payment Method
                 </button>
@@ -883,59 +763,66 @@ const PosTerminal = ({
               {/* CUSTOMER DEBT */}
               {selectedCustomer && selectedCustomer.outstandingBalance > 0 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
-                  <p className="text-amber-700 font-medium">
+                  <p className="text-amber-700 text-xs sm:text-sm font-medium">
                     Outstanding Balance
                   </p>
-                  <p className="text-amber-900 mt-2 font-semibold">
+                  <p className="text-amber-950 mt-1 text-base sm:text-lg font-bold">
                     ₦{selectedCustomer.outstandingBalance.toLocaleString()}
                   </p>
                 </div>
               )}
 
-              {/* SUMMARY */}
-              <div className="bg-emerald-50 border border-emerald-200 rounded-3xl p-6">
-                <h3 className="font-semibold mb-5 text-gray-900">
+              {/* SUMMARY CARD */}
+              <div className="bg-emerald-50 border border-emerald-200 rounded-3xl p-5 sm:p-6">
+                <h3 className="font-bold mb-4 text-gray-900 text-sm sm:text-base">
                   Order Summary
                 </h3>
-
-                <div className="space-y-3 text-sm text-gray-700">
+                <div className="space-y-3 text-xs sm:text-sm text-gray-700">
                   <div className="flex justify-between">
                     <span>Subtotal</span>
-                    <span>₦{subtotal.toLocaleString()}</span>
+                    <span className="font-medium">
+                      ₦{subtotal.toLocaleString()}
+                    </span>
                   </div>
 
                   {discountAmount > 0 && (
-                    <div className="flex justify-between text-red-500">
+                    <div className="flex justify-between text-red-600">
                       <span>Discount</span>
-                      <span>-₦{discountAmount.toLocaleString()}</span>
+                      <span className="font-medium">
+                        -₦{discountAmount.toLocaleString()}
+                      </span>
                     </div>
                   )}
 
-                  <div className="border-t border-gray-300 pt-4 flex justify-between text-2xl font-bold text-gray-900">
+                  <div className="border-t border-emerald-200 pt-3.5 flex justify-between text-xl sm:text-2xl font-black text-gray-900">
                     <span>Total</span>
                     <span>₦{totalAmount.toLocaleString()}</span>
                   </div>
 
-                  <div className="flex justify-between">
+                  <div className="flex justify-between text-emerald-800">
                     <span>Paid</span>
-                    <span>₦{totalPaid.toLocaleString()}</span>
+                    <span className="font-medium">
+                      ₦{totalPaid.toLocaleString()}
+                    </span>
                   </div>
 
                   {changeAmount > 0 && (
-                    <div className="flex justify-between">
+                    <div className="flex justify-between text-emerald-800">
                       <span>Change</span>
-                      <span>₦{changeAmount.toLocaleString()}</span>
+                      <span className="font-medium">
+                        ₦{changeAmount.toLocaleString()}
+                      </span>
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* FOOTER */}
-              <div className="mt-auto space-y-3">
+              {/* ACTIONS */}
+              <div className="space-y-2.5 pt-4 sm:pt-0">
                 <button
                   type="button"
                   onClick={onClose}
-                  className="w-full py-3 rounded-2xl bg-gray-100 text-gray-700"
+                  className="w-full py-3.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold text-sm transition"
                 >
                   Cancel
                 </button>
@@ -943,7 +830,7 @@ const PosTerminal = ({
                 <button
                   type="submit"
                   disabled={isSubmitting || totalPaid < totalAmount}
-                  className="w-full py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold disabled:opacity-50"
+                  className="w-full py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-base shadow-lg shadow-emerald-600/10 disabled:opacity-50 disabled:shadow-none transition"
                 >
                   {isSubmitting ? "Processing..." : "Complete Sale"}
                 </button>

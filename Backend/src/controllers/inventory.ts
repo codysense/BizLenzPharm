@@ -2152,6 +2152,7 @@ export class InventoryController {
         AND (
           i."sku" ILIKE ${"%" + search + "%"} COLLATE "C"
           OR i."name" ILIKE ${"%" + search + "%"} COLLATE "C"
+           OR trim(i."description") ILIKE ${"%" + search + "%"} COLLATE "C"
         )
         ORDER BY i."createdAt" DESC
         LIMIT ${limit} OFFSET ${skip};
@@ -2169,6 +2170,7 @@ export class InventoryController {
         AND (
           i."sku" ILIKE ${"%" + search + "%"} COLLATE "C"
           OR i."name" ILIKE ${"%" + search + "%"} COLLATE "C"
+          OR trim(i."description") ILIKE ${"%" + search + "%"} COLLATE "C"
         );
       `;
 

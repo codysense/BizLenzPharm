@@ -46,6 +46,36 @@ router.get(
   ]),
   posController.getSales,
 );
+// POS Pending Sales
+router.post(
+  "/pending-sales",
+  requireRole(["POS User", "Senior Accountant", "Accountant"]),
+  auditLogger("CREATE", "POS_SALE"),
+  posController.createPendingSale,
+);
+router.get(
+  "/pending-sales",
+  requireRole([
+    "POS User",
+    "Senior Accountant",
+    "Accountant",
+    "Auditor",
+    "Manager",
+  ]),
+  posController.getPendingSales,
+);
+
+router.delete(
+  "/pending-sales/:id",
+  requireRole([
+    "Inventory Manager",
+    "Senior Accountant",
+    "Production Manager",
+    "Manager",
+  ]),
+  auditLogger("DELETE", "ITEM"),
+  posController.deletePendingSale,
+);
 //Get Sales for Dashboard
 router.get(
   "/sales/dashboard",

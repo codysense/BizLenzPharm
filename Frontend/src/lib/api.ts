@@ -187,8 +187,26 @@ export const inventoryApi = {
     limit?: number;
     type?: string;
     search?: string;
+    noZeroItem?: boolean;
   }) =>
-    api.get(
+    api.get<{
+      items: Array<{
+        id: string;
+        sku: string;
+        name: string;
+        description: string;
+        stockQty: number;
+        cartonQuantity?: number;
+        uom: string;
+        priceList?: Array<{ id: string; customerGroup: string; price: number }>;
+      }>;
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        pages: number;
+      };
+    }>(
       `/inventory/items?includeStock=true${
         params ? "&" + new URLSearchParams(params as any).toString() : ""
       }`,
@@ -931,6 +949,10 @@ export const posApi = {
 
   // Sales
   createSale: (data: CreatePosSaleRequest) => api.post("/pos/sales", data),
+  createPendingSale: (data: CreatePosSaleRequest) =>
+    api.post("/pos/pending-sales", data),
+  getPendingSales: () => api.get("/pos/pending-sales"),
+  deletePendingSale: (id: string) => api.delete(`/pending-sales/${id}`),
   getPOSsalePayments: (saleId: string) =>
     api.get(`/pos/sales/${saleId}/payments`),
   getSales: (params?: {

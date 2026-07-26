@@ -352,7 +352,7 @@ export class ReportsService {
       LEFT JOIN warehouses w   ON ps."warehouseId"   = w.id
       LEFT JOIN cash_accounts ca ON ps."cashAccountId" = ca.id
       LEFT JOIN users u       ON ps."userId"        = u.id
-      WHERE ps."createdAt"::date BETWEEN $1::date AND $2::date and status = 'COMPLETED'
+      WHERE ps."createdAt"::date BETWEEN $1::date AND $2::date and ps.status = 'COMPLETED'
   `;
 
     const values: any[] = [newFromDate, newToDate];

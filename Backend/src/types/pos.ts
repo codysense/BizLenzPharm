@@ -15,6 +15,7 @@ export const closePosSessionSchema = z.object({
 export const createPosSaleSchema = z.object({
   sessionId: z.string().cuid("Session is required"),
   customerId: z.string().cuid().optional(),
+  pendingSaleId: z.string().cuid().optional(), // Optional field to reference a pending sale
 
   saleLines: z
     .array(
