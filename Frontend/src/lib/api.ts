@@ -738,6 +738,11 @@ export const reportsApi = {
     itemId?: string;
   }) =>
     api.get(`/reports/sales-by-item?${new URLSearchParams(params).toString()}`),
+
+  getOutOfStockItems: (params: { warehouseId?: string }) =>
+    api.get(
+      `/reports/out-stock-items?${new URLSearchParams(params).toString()}`,
+    ),
   getPOSSalesReport: (params: {
     dateFrom: string;
     dateTo: string;

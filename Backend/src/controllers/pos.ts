@@ -766,7 +766,7 @@ export class PosController {
 
           return posSale;
         },
-        { timeout: 20000 },
+        { timeout: 30000 },
       );
 
       res.status(201).json(sale);

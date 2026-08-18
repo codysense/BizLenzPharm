@@ -306,14 +306,14 @@ export class ReportsController {
   async getSalesByItem(req: AuthRequest, res: Response) {
     try {
       const { dateFrom, dateTo, itemId } = req.query;
-      console.log(
-        "Sales by item(controller)- Date From:",
-        dateFrom,
-        "Date To:",
-        dateTo,
-        "Item:",
-        itemId,
-      );
+      // console.log(
+      //   "Sales by item(controller)- Date From:",
+      //   dateFrom,
+      //   "Date To:",
+      //   dateTo,
+      //   "Item:",
+      //   itemId,
+      // );
 
       if (!dateFrom || !dateTo) {
         return res.status(400).json({ error: "Date range is required" });
@@ -332,6 +332,21 @@ export class ReportsController {
       res
         .status(400)
         .json({ error: "Failed to generate sales by item report" });
+    }
+  }
+
+  async getOutOfStockItems(req: AuthRequest, res: Response) {
+    try {
+      const { warehouseId } = req.query;
+      const report = await reportsService.getOutOfStockItems(
+        warehouseId ? String(warehouseId) : undefined,
+      );
+      res.json(report);
+    } catch (error) {
+      console.error("Out of stock items error:", error);
+      res
+        .status(400)
+        .json({ error: "Failed to generate out of stock items report" });
     }
   }
 

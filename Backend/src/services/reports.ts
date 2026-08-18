@@ -1833,26 +1833,79 @@ ORDER BY v.name;
     return varianceReport;
   }
 
+  // async getSalesByItem(fromDate: Date, toDate: Date, itemId?: string) {
+  //   const newToDate = endOfDayUTC(toDate);
+  //   const newFromDate = startOfDayUTC(fromDate);
+  //   console.log("Getting sales by item with params:", {
+  //     fromDate: newFromDate,
+  //     toDate: newToDate,
+  //     itemId,
+  //   });
+
+  //   //Get Item ID if item code or name is provided
+  //   // let itemId: string | undefined = undefined;
+  //   // if (item) {
+  //   //   const foundItem = await prisma.item.findFirst({
+  //   //     where: {
+  //   //       OR: [{ sku: item }, { name: item }],
+  //   //     },
+  //   //   });
+  //   //   itemId = foundItem?.id;
+  //   // }
+
+  //   const sales = await prisma.sale.findMany({
+  //     where: {
+  //       orderDate: {
+  //         gte: newFromDate,
+  //         lte: newToDate,
+  //       },
+  //       status: { in: ["DELIVERED", "INVOICED", "PAID"] },
+  //     },
+  //     include: {
+  //       saleLines: {
+  //         where: itemId !== "undefined" ? { itemId: itemId } : undefined,
+  //         include: {
+  //           item: {
+  //             select: { sku: true, name: true, type: true },
+  //           },
+  //         },
+  //       },
+  //     },
+  //   });
+
+  //   const itemSalesMap = new Map();
+
+  //   sales.forEach((sale) => {
+  //     sale.saleLines.forEach((line) => {
+  //       const key = line.itemId;
+  //       if (!itemSalesMap.has(key)) {
+  //         itemSalesMap.set(key, {
+  //           item: line.item,
+  //           totalQty: 0,
+  //           totalValue: 0,
+  //           orderCount: 0,
+  //         });
+  //       }
+
+  //       const itemSales = itemSalesMap.get(key);
+  //       itemSales.totalQty += line.qty.toNumber();
+  //       itemSales.totalValue += line.lineTotal.toNumber();
+  //       itemSales.orderCount += 1;
+  //     });
+  //   });
+
+  //   return Array.from(itemSalesMap.values()).sort(
+  //     (a, b) => b.totalValue - a.totalValue,
+  //   );
+  // }
+
   async getSalesByItem(fromDate: Date, toDate: Date, itemId?: string) {
     const newToDate = endOfDayUTC(toDate);
     const newFromDate = startOfDayUTC(fromDate);
-    console.log("Getting sales by item with params:", {
-      fromDate: newFromDate,
-      toDate: newToDate,
-      itemId,
-    });
 
-    //Get Item ID if item code or name is provided
-    // let itemId: string | undefined = undefined;
-    // if (item) {
-    //   const foundItem = await prisma.item.findFirst({
-    //     where: {
-    //       OR: [{ sku: item }, { name: item }],
-    //     },
-    //   });
-    //   itemId = foundItem?.id;
-    // }
+    const hasItemFilter = itemId && itemId !== "undefined";
 
+    // ───── Regular Sales ─────
     const sales = await prisma.sale.findMany({
       where: {
         orderDate: {
@@ -1862,8 +1915,9 @@ ORDER BY v.name;
         status: { in: ["DELIVERED", "INVOICED", "PAID"] },
       },
       include: {
+        customer: { select: { code: true, name: true } },
         saleLines: {
-          where: itemId !== "undefined" ? { itemId: itemId } : undefined,
+          where: hasItemFilter ? { itemId } : undefined,
           include: {
             item: {
               select: { sku: true, name: true, type: true },
@@ -1873,32 +1927,159 @@ ORDER BY v.name;
       },
     });
 
-    const itemSalesMap = new Map();
+    // ───── POS Sales ─────
+    const posSales = await prisma.posSale.findMany({
+      where: {
+        createdAt: {
+          gte: newFromDate,
+          lte: newToDate,
+        },
+        status: "COMPLETED",
+      },
+      include: {
+        customer: { select: { code: true, name: true } },
+        saleLines: {
+          where: hasItemFilter ? { itemId } : undefined,
+          include: {
+            item: {
+              select: { sku: true, name: true, type: true },
+            },
+          },
+        },
+      },
+    });
+
+    interface SaleDetailRow {
+      source: "SALE" | "POS";
+      reference: string;
+      date: Date;
+      itemId: string;
+      item: { sku: string; name: string; type: string };
+      customer: string | null;
+      qty: number;
+      unitPrice: number;
+      lineTotal: number;
+    }
+
+    const rows: SaleDetailRow[] = [];
 
     sales.forEach((sale) => {
       sale.saleLines.forEach((line) => {
-        const key = line.itemId;
-        if (!itemSalesMap.has(key)) {
-          itemSalesMap.set(key, {
-            item: line.item,
-            totalQty: 0,
-            totalValue: 0,
-            orderCount: 0,
-          });
-        }
-
-        const itemSales = itemSalesMap.get(key);
-        itemSales.totalQty += line.qty.toNumber();
-        itemSales.totalValue += line.lineTotal.toNumber();
-        itemSales.orderCount += 1;
+        rows.push({
+          source: "SALE",
+          reference: sale.orderNo,
+          date: sale.orderDate,
+          itemId: line.itemId,
+          item: line.item,
+          customer: sale.customer?.name || null,
+          qty: line.qty.toNumber(),
+          unitPrice: line.unitPrice.toNumber(),
+          lineTotal: line.lineTotal.toNumber(),
+        });
       });
     });
 
-    return Array.from(itemSalesMap.values()).sort(
-      (a, b) => b.totalValue - a.totalValue,
+    posSales.forEach((posSale) => {
+      posSale.saleLines.forEach((line) => {
+        rows.push({
+          source: "POS",
+          reference: posSale.saleNo,
+          date: posSale.createdAt,
+          itemId: line.itemId,
+          item: line.item,
+          customer: posSale.customer?.name || null,
+          qty: line.qty.toNumber(),
+          unitPrice: line.unitPrice.toNumber(),
+          lineTotal: line.lineTotal.toNumber(),
+        });
+      });
+    });
+
+    // Most recent first
+    rows.sort((a, b) => b.date.getTime() - a.date.getTime());
+
+    // ───── Summary (for the footer) ─────
+    const summary = rows.reduce(
+      (acc, row) => {
+        acc.totalQty += row.qty;
+        acc.totalValue += row.lineTotal;
+        acc.totalOrders += 1;
+        if (row.source === "SALE") acc.salesOrderCount += 1;
+        else acc.posOrderCount += 1;
+        return acc;
+      },
+      {
+        totalQty: 0,
+        totalValue: 0,
+        totalOrders: 0,
+        salesOrderCount: 0,
+        posOrderCount: 0,
+      },
     );
+
+    return { rows, summary };
   }
 
+  async getOutOfStockItems(warehouseId?: string) {
+    const hasWarehouseFilter = warehouseId && warehouseId !== "undefined";
+
+    const rows = await prisma.$queryRawUnsafe<
+      {
+        item_id: string;
+        sku: string;
+        name: string;
+        type: string;
+        warehouse_id: string;
+        warehouse_name: string;
+        running_qty: number;
+        running_value: number;
+        last_movement_date: Date;
+        last_ref_type: string;
+        last_ref_id: string;
+      }[]
+    >(
+      `
+    SELECT
+      il."itemId"        AS item_id,
+      i."sku"             AS sku,
+      i."name"            AS name,
+      i."type"            AS type,
+      il."warehouseId"    AS warehouse_id,
+      w."name"            AS warehouse_name,
+      il."runningQty"     AS running_qty,
+      il."runningValue"   AS running_value,
+      il."postedAt"       AS last_movement_date,
+      il."refType"        AS last_ref_type,
+      il."refId"          AS last_ref_id
+    FROM (
+      SELECT DISTINCT ON (il2."itemId", il2."warehouseId")
+        il2.*
+      FROM inventory_ledger il2
+      ${hasWarehouseFilter ? `WHERE il2."warehouseId" = $1` : ""}
+      ORDER BY il2."itemId", il2."warehouseId", il2."postedAt" DESC, il2."id" DESC
+    ) il
+    INNER JOIN items i ON i.id = il."itemId"
+    INNER JOIN warehouses w ON w.id = il."warehouseId"
+    WHERE il."runningQty" = 0
+    ORDER BY il."postedAt" DESC;
+    `,
+      ...(hasWarehouseFilter ? [warehouseId] : []),
+    );
+
+    return rows.map((row) => ({
+      itemId: row.item_id,
+      sku: row.sku,
+      name: row.name,
+      type: row.type,
+      warehouseId: row.warehouse_id,
+      warehouseName: row.warehouse_name,
+      runningQty: Number(row.running_qty),
+      runningValue: Number(row.running_value),
+      lastMovementDate: row.last_movement_date,
+      lastMovementType: row.last_ref_type,
+      lastMovementRef: row.last_ref_id,
+    }));
+  }
   async getSalesByCustomer(fromDate: Date, toDate: Date) {
     const newToDate = endOfDayUTC(toDate);
     const newFromDate = startOfDayUTC(fromDate);

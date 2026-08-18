@@ -258,6 +258,15 @@ const Reports = () => {
       requiresItem: true,
     },
     {
+      id: "out-of-stock-items",
+      name: "Out of Stock Items Report",
+      description: "List of items that are currently out of stock",
+      icon: AlertTriangle,
+      category: "Operational",
+      supportsWarehouse: true,
+    },
+
+    {
       id: "pos-sales",
       name: "POS Sales Report",
       description: "Detail POS Sales for all terminals",
@@ -474,6 +483,16 @@ const Reports = () => {
 
             itemId: itemFilter || undefined,
           });
+          break;
+        case "out-of-stock-items":
+          if (!warehouseFilter) {
+            alert("Please select a warehouse");
+            return;
+          }
+          data = await reportsApi.getOutOfStockItems({
+            warehouseId: warehouseFilter,
+          });
+
           break;
         case "sales-by-customer":
           if (!dateFrom || !dateTo) {
@@ -856,20 +875,58 @@ const Reports = () => {
         }
         case "sales-by-item": {
           const salesItemColumns = [
+            { key: "date", header: "Date" },
+            { key: "source", header: "Channel" },
+            { key: "reference", header: "Reference" },
             { key: "item.sku", header: "Item SKU" },
             { key: "item.name", header: "Item Name" },
-            { key: "totalQty", header: "Total Qty Sold" },
-            { key: "totalValue", header: "Total Value" },
-            { key: "orderCount", header: "Order Count" },
+            { key: "customer", header: "Customer" },
+            { key: "qty", header: "Qty" },
+            { key: "unitPrice", header: "Unit Price" },
+            { key: "lineTotal", header: "Line Total" },
           ];
           ReportExporter.exportGenericReport(
-            reportData,
+            reportData.rows || [],
             salesItemColumns,
             "Sales by Item",
             format,
           );
           break;
         }
+
+        case "out-of-stock": {
+          const outOfStockColumns = [
+            { key: "sku", header: "Item SKU" },
+            { key: "name", header: "Item Name" },
+            { key: "warehouseName", header: "Warehouse" },
+            { key: "runningQty", header: "Current Qty" },
+            { key: "lastMovementDate", header: "Date Finished" },
+            { key: "lastMovementType", header: "Last Movement" },
+          ];
+          ReportExporter.exportGenericReport(
+            reportData || [],
+            outOfStockColumns,
+            "Out of Stock",
+            format,
+          );
+          break;
+        }
+        // case "sales-by-item": {
+        //   const salesItemColumns = [
+        //     { key: "item.sku", header: "Item SKU" },
+        //     { key: "item.name", header: "Item Name" },
+        //     { key: "totalQty", header: "Total Qty Sold" },
+        //     { key: "totalValue", header: "Total Value" },
+        //     { key: "orderCount", header: "Order Count" },
+        //   ];
+        //   ReportExporter.exportGenericReport(
+        //     reportData,
+        //     salesItemColumns,
+        //     "Sales by Item",
+        //     format,
+        //   );
+        //   break;
+        // }
         case "pos-sales": {
           const POSsalesColumns = [
             { key: "TransactionDate", header: "Transaction Date" },
@@ -991,6 +1048,8 @@ const Reports = () => {
         return <ProductionVarianceReport data={reportData} />;
       case "sales-by-item":
         return <SalesByItemReport data={reportData} />;
+      case "out-of-stock-items":
+        return <OutOfStockItemsReport data={reportData} />;
       case "sales-by-customer":
         return <SalesByCustomerReport data={reportData} />;
       case "pos-sales":
@@ -2509,37 +2568,78 @@ const ProductionVarianceReport = ({ data }: { data: any }) => {
 };
 
 const SalesByItemReport = ({ data }: { data: any }) => {
+  const rows = data?.rows || [];
+  const summary = data?.summary || {
+    totalQty: 0,
+    totalValue: 0,
+    totalOrders: 0,
+    salesOrderCount: 0,
+    posOrderCount: 0,
+  };
+
   const columns = [
+    {
+      key: "date",
+      header: "Date",
+      cell: (row: any) => new Date(row.date).toLocaleDateString(),
+      width: "w-28",
+    },
+    {
+      key: "source",
+      header: "Channel",
+      cell: (row: any) => (
+        <span
+          className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
+            row.source === "POS"
+              ? "bg-purple-100 text-purple-800"
+              : "bg-blue-100 text-blue-800"
+          }`}
+        >
+          {row.source === "POS" ? "POS" : "Sale"}
+        </span>
+      ),
+      width: "w-20",
+    },
+    {
+      key: "reference",
+      header: "Reference",
+      cell: (row: any) => row.reference,
+      width: "w-32",
+    },
     {
       key: "item",
       header: "Item",
-      cell: (item: any) => (
+      cell: (row: any) => (
         <div>
-          <div className="font-medium">{item.item?.sku || "N/A"}</div>
-          <div className="text-sm text-gray-500">
-            {item.item?.name || "N/A"}
-          </div>
+          <div className="font-medium">{row.item?.sku || "N/A"}</div>
+          <div className="text-sm text-gray-500">{row.item?.name || "N/A"}</div>
         </div>
       ),
       width: "w-48",
     },
     {
-      key: "totalQty",
-      header: "Total Qty Sold",
-      cell: (item: any) => (item.totalQty || 0).toLocaleString(),
-      width: "w-32",
+      key: "customer",
+      header: "Customer",
+      cell: (row: any) => row.customer || "Walk-in",
+      width: "w-40",
     },
     {
-      key: "totalValue",
-      header: "Total Value",
-      cell: (item: any) => `₦${(item.totalValue || 0).toLocaleString()}`,
-      width: "w-32",
+      key: "qty",
+      header: "Qty",
+      cell: (row: any) => (row.qty || 0).toLocaleString(),
+      width: "w-20",
     },
     {
-      key: "orderCount",
-      header: "Order Count",
-      cell: (item: any) => (item.orderCount || 0).toLocaleString(),
-      width: "w-24",
+      key: "unitPrice",
+      header: "Unit Price",
+      cell: (row: any) => `₦${(row.unitPrice || 0).toLocaleString()}`,
+      width: "w-28",
+    },
+    {
+      key: "lineTotal",
+      header: "Line Total",
+      cell: (row: any) => `₦${(row.lineTotal || 0).toLocaleString()}`,
+      width: "w-28",
     },
   ];
 
@@ -2549,7 +2649,129 @@ const SalesByItemReport = ({ data }: { data: any }) => {
         <h2 className="text-xl font-bold">Sales by Item Report</h2>
       </div>
 
-      <DataTable data={data || []} columns={columns} />
+      <DataTable data={rows} columns={columns} />
+
+      <div className="bg-blue-50 p-4 rounded-lg">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-5 text-center">
+          <div>
+            <div className="text-xs text-gray-500 uppercase">Total Qty</div>
+            <div className="text-lg font-semibold text-gray-900">
+              {summary.totalQty.toLocaleString()}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 uppercase">Total Value</div>
+            <div className="text-lg font-semibold text-blue-600">
+              ₦{summary.totalValue.toLocaleString()}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 uppercase">Total Orders</div>
+            <div className="text-lg font-semibold text-gray-900">
+              {summary.totalOrders.toLocaleString()}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 uppercase">Sales Orders</div>
+            <div className="text-lg font-semibold text-gray-900">
+              {summary.salesOrderCount.toLocaleString()}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 uppercase">POS Orders</div>
+            <div className="text-lg font-semibold text-gray-900">
+              {summary.posOrderCount.toLocaleString()}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const OutOfStockItemsReport = ({ data }: { data: any }) => {
+  const rows = data || [];
+
+  const totalItems = rows.length;
+  const totalValueLost = rows.reduce(
+    (sum: number, r: any) => sum + (r.runningValue || 0),
+    0,
+  );
+
+  const columns = [
+    {
+      key: "item",
+      header: "Item",
+      cell: (row: any) => (
+        <div>
+          <div className="font-medium">{row.sku || "N/A"}</div>
+          <div className="text-sm text-gray-500">{row.name || "N/A"}</div>
+        </div>
+      ),
+      width: "w-48",
+    },
+    {
+      key: "warehouseName",
+      header: "Warehouse",
+      cell: (row: any) => row.warehouseName,
+      width: "w-32",
+    },
+    {
+      key: "runningQty",
+      header: "Current Qty",
+      cell: (row: any) => (
+        <span className="text-red-600 font-medium">
+          {(row.runningQty || 0).toLocaleString()}
+        </span>
+      ),
+      width: "w-24",
+    },
+    {
+      key: "lastMovementDate",
+      header: "Date Finished",
+      cell: (row: any) => new Date(row.lastMovementDate).toLocaleDateString(),
+      width: "w-32",
+    },
+    {
+      key: "lastMovementType",
+      header: "Last Movement",
+      cell: (row: any) => (
+        <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+          {row.lastMovementType}
+        </span>
+      ),
+      width: "w-32",
+    },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="text-center">
+        <h2 className="text-xl font-bold">Out of Stock Report</h2>
+      </div>
+
+      <DataTable data={rows} columns={columns} />
+
+      <div className="bg-red-50 p-4 rounded-lg">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 text-center">
+          <div>
+            <div className="text-xs text-gray-500 uppercase">
+              Items Out of Stock
+            </div>
+            <div className="text-lg font-semibold text-red-600">
+              {totalItems.toLocaleString()}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 uppercase">
+              Last Known Value
+            </div>
+            <div className="text-lg font-semibold text-gray-900">
+              ₦{totalValueLost.toLocaleString()}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };

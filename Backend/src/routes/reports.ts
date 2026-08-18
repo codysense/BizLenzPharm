@@ -105,6 +105,20 @@ router.get(
   requireRole(["Inventory Manager", "Senior Accountant", "Auditor", "Manager"]),
   reportsController.getSalesByItem,
 );
+
+router.get(
+  "/out-stock-items",
+  requireRole([
+    "Inventory Manager",
+    "Assistant Inventory Manager",
+    "Senior Accountant",
+    "Auditor",
+    "Manager",
+    "POS User",
+  ]),
+  reportsController.getOutOfStockItems,
+);
+
 router.get(
   "/pos-sales",
   requireRole(["Senior Accountant", "Auditor", "Manager", "POS User"]),
