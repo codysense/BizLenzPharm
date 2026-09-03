@@ -8,6 +8,7 @@ import {
   Edit,
   Trash2,
   Printer,
+  RotateCcw,
 } from "lucide-react";
 import { managementApi, salesApi } from "../../lib/api";
 import { DataTable } from "../../components/DataTable";
@@ -21,15 +22,20 @@ import { useAuthStore } from "../../store/authStore";
 import { ReportExporter } from "../../utils/reportExport";
 import toast from "react-hot-toast";
 import QRCode from "qrcode";
+import { CustomerSelect } from "../../components/CustomerSelect";
+import CreateSalesReturnModal from "./CreateSalesReturnModal";
 
 const SalesOrders = () => {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<string>("");
+  const [customerFilter, setCustomerFilter] = useState<string>("");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showDeliverModal, setShowDeliverModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
+  const [showReturnModal, setShowReturnModal] = useState(false);
+  //const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
   const { user } = useAuthStore();
 
   // Check if user can perform actions (Accountant or GM only)
@@ -41,12 +47,16 @@ const SalesOrders = () => {
     user?.roles.includes("Accountant");
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ["sales", { page, status: statusFilter }],
+    queryKey: [
+      "sales",
+      { page, status: statusFilter, customerId: customerFilter },
+    ],
     queryFn: () =>
       salesApi.getSales({
         page,
         limit: 10,
         ...(statusFilter && { status: statusFilter }),
+        ...(customerFilter && { customerId: customerFilter }),
       }),
   });
 
@@ -143,6 +153,12 @@ const SalesOrders = () => {
     } catch (error) {
       console.error("Invoice sale error:", error);
     }
+  };
+
+  const handleReturnSuccess = () => {
+    refetch();
+    setShowReturnModal(false);
+    setSelectedSale(null);
   };
 
   const { data: companyInformations } = useQuery({
@@ -513,6 +529,20 @@ const SalesOrders = () => {
           <FileText className="h-4 w-4" />
         </button>
       )}
+
+      {["DELIVERED", "INVOICED", "PAID"].includes(sale.status) &&
+        canPerformActions && (
+          <button
+            onClick={() => {
+              setSelectedSale(sale);
+              setShowReturnModal(true);
+            }}
+            className="text-orange-600 hover:text-orange-900"
+            title="Create Return"
+          >
+            <RotateCcw className="h-4 w-4" />
+          </button>
+        )}
     </div>
   );
 
@@ -552,6 +582,16 @@ const SalesOrders = () => {
               <option value="INVOICED">Invoiced</option>
               <option value="PAID">Paid</option>
             </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Customer
+            </label>
+            <CustomerSelect
+              value={customerFilter}
+              onChange={(customerId) => setCustomerFilter(customerId)}
+              placeholder="Select Customer"
+            />
           </div>
         </div>
       </div>
@@ -649,6 +689,18 @@ const SalesOrders = () => {
             setSelectedSale(null);
           }}
           onSuccess={handleDeliverSuccess}
+        />
+      )}
+
+      {/* Create Return Modal */}
+      {showReturnModal && selectedSale && (
+        <CreateSalesReturnModal
+          saleId={selectedSale.id}
+          onClose={() => {
+            setShowReturnModal(false);
+            setSelectedSale(null);
+          }}
+          onSuccess={handleReturnSuccess}
         />
       )}
     </div>

@@ -79,6 +79,66 @@ router.post(
   salesController.invoiceSale,
 );
 
+// Sales returns
+router.post(
+  "/sales-return",
+  requireRole([
+    "Senior Accountant",
+    "POS User",
+    "Senior Accountant",
+    "Accountant",
+    "Manager",
+  ]),
+  auditLogger("CREATE", "SALES_RETURN"),
+  salesController.createSalesReturn,
+);
+
+router.post(
+  "/sales-return/confirm/:id",
+  requireRole([
+    "Senior Accountant",
+    "Senior Accountant",
+    "Accountant",
+    "Manager",
+  ]),
+  salesController.confirmSalesReturn,
+);
+
+router.get(
+  "/sales-return/returnable-lines/:saleId",
+  requireRole([
+    "Senior Accountant",
+    "POS User",
+    "Senior Accountant",
+    "Accountant",
+    "Manager",
+  ]),
+  salesController.getReturnableLines,
+);
+router.get(
+  "/sales-returns/get-sales-returns",
+  requireRole([
+    "Senior Accountant",
+    "POS User",
+    "Senior Accountant",
+    "Accountant",
+    "Manager",
+  ]),
+  salesController.getSalesReturns,
+);
+
+router.post(
+  "/sales-return/cancel/:id",
+  requireRole([
+    "Senior Accountant",
+    "POS User",
+    "Senior Accountant",
+    "Accountant",
+    "Manager",
+  ]),
+  salesController.cancelSalesReturn,
+);
+
 // Customers
 router.get(
   "/customers",

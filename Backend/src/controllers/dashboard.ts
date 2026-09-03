@@ -7,25 +7,60 @@ import { Decimal } from "@prisma/client/runtime/library";
 const prisma = new PrismaClient();
 const reportsService = new ReportsService();
 
+function getDateRange(query: any): { startDate: Date; endDate: Date } {
+  const now = new Date();
+  const period = (query.period as string)?.toLowerCase();
+
+  let startDate: Date;
+  let endDate: Date = new Date();
+
+  if (query.startDate && query.endDate) {
+    startDate = new Date(query.startDate as string);
+    endDate = new Date(query.endDate as string);
+    return { startDate, endDate };
+  }
+
+  switch (period) {
+    case "today": {
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+      break;
+    }
+    case "this_week": {
+      const day = now.getDay();
+      const diff = now.getDate() - day + (day === 0 ? -6 : 1); // Monday
+      startDate = new Date(now.getFullYear(), now.getMonth(), diff, 0, 0, 0, 0);
+      endDate = new Date();
+      break;
+    }
+    case "this_year": {
+      startDate = new Date(Date.UTC(now.getFullYear(), 0, 1, 0, 0, 0, 0));
+      endDate = new Date();
+      break;
+    }
+    case "this_month":
+    default: {
+      startDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0));
+      endDate = new Date();
+      break;
+    }
+  }
+
+  return { startDate, endDate };
+}
+
 export class DashboardController {
   async getExecutiveSummary(req: AuthRequest, res: Response) {
     try {
-      const now = new Date();
-      const startDate = new Date(
-        Date.UTC(now.getFullYear(), now.getMonth(), 1),
-      );
-      const endDate = new Date();
-
-      // console.log(
-      //   "Fetching executive summary for date range:",
-      //   startDate,
-      //   "to",
-      //   endDate,
-      // );
+      const { startDate, endDate } = getDateRange(req.query);
 
       const [
         regularSales,
         posSales,
+        salesReturns,
+        posReturns,
+        regularPurchases,
+        purchaseReturns,
         receivables,
         payables,
         vendorPayments,
@@ -46,6 +81,37 @@ export class DashboardController {
           where: {
             status: "COMPLETED",
             createdAt: { gte: startDate, lte: endDate },
+          },
+          _sum: { totalAmount: true },
+        }),
+
+        prisma.salesReturn.aggregate({
+          where: {
+            status: "CONFIRMED",
+            returnDate: { gte: startDate, lte: endDate },
+          },
+          _sum: { totalAmount: true },
+        }),
+
+        prisma.posReturn.aggregate({
+          where: {
+            createdAt: { gte: startDate, lte: endDate },
+          },
+          _sum: { totalAmount: true },
+        }),
+
+        prisma.purchase.aggregate({
+          where: {
+            orderDate: { gte: startDate, lte: endDate },
+            status: { in: ["ORDERED", "RECEIVED", "INVOICED", "PAID", "PARTIALLY_PAID"] },
+          },
+          _sum: { totalAmount: true },
+        }),
+
+        prisma.purchaseReturn.aggregate({
+          where: {
+            status: "CONFIRMED",
+            returnDate: { gte: startDate, lte: endDate },
           },
           _sum: { totalAmount: true },
         }),
@@ -121,9 +187,21 @@ export class DashboardController {
         reportsService.getProfitAndLoss(startDate, endDate),
       ]);
 
-      const revenue =
+      const grossSales =
         Number(regularSales._sum.totalAmount || 0) +
         Number(posSales._sum.totalAmount || 0);
+
+      const totalReturns =
+        Number(salesReturns._sum.totalAmount || 0) +
+        Number(posReturns._sum.totalAmount || 0);
+
+      const netRevenue = grossSales - totalReturns;
+
+      const grossPurchases = Number(regularPurchases._sum.totalAmount || 0);
+      const totalPurchaseReturns = Number(
+        purchaseReturns._sum.totalAmount || 0,
+      );
+      const netPurchases = grossPurchases - totalPurchaseReturns;
 
       const expenses =
         Number(vendorPayments._sum.totalAmount || 0) +
@@ -134,22 +212,14 @@ export class DashboardController {
         Number(customerPayments._sum.totalAmount || 0);
       const outflow = Number(operationalPayments._sum.amount || 0);
 
-      // console.log("Executive Summary:", {
-      //   regularSales: Number(regularSales._sum.totalAmount || 0),
-      //   posSales: Number(posSales._sum.totalAmount || 0),
-      //   receivables: Number(receivables._sum.totalAmount || 0),
-      //   payables: Number(payables._sum.balanceAmount || 0),
-      // });
-
-      console.log(
-        "Net Profit",
-        profitLoss.netIncome,
-        "Gross Profit",
-        profitLoss.grossProfit,
-      );
-
       res.json({
-        revenue,
+        revenue: netRevenue,
+        grossSales,
+        totalReturns,
+        netSales: netRevenue,
+        grossPurchases,
+        totalPurchaseReturns,
+        netPurchases,
         receivables: Number(receivables._sum.totalAmount || 0),
         payables: Number(payables._sum.balanceAmount || 0),
         expenses: profitLoss.totalExpense,
@@ -168,11 +238,7 @@ export class DashboardController {
 
   async getTopProducts(req: AuthRequest, res: Response) {
     try {
-      const now = new Date();
-      const startDate = new Date(
-        Date.UTC(now.getFullYear(), now.getMonth(), 1),
-      );
-      const endDate = new Date();
+      const { startDate, endDate } = getDateRange(req.query);
 
       const topProducts = await prisma.$queryRaw`
           WITH regular_sales_agg AS (
@@ -190,20 +256,35 @@ export class DashboardController {
             WHERE ps.status = 'COMPLETED'
               AND ps."createdAt" >= ${startDate} AND ps."createdAt" <= ${endDate}
             GROUP BY psl."itemId"
+          ),
+          sales_returns_agg AS (
+            SELECT srl."itemId", SUM(srl.qty) as qty, SUM(srl."lineTotal") as revenue
+            FROM sales_return_lines srl
+            JOIN sales_returns sr ON sr.id = srl."salesReturnId"
+            WHERE sr.status = 'CONFIRMED'
+              AND sr."returnDate" >= ${startDate} AND sr."returnDate" <= ${endDate}
+            GROUP BY srl."itemId"
+          ),
+          pos_returns_agg AS (
+            SELECT prl."itemId", SUM(prl."qtyReturned") as qty, SUM(prl."lineTotal") as revenue
+            FROM pos_return_lines prl
+            JOIN pos_returns pr ON pr.id = prl."posReturnId"
+            WHERE pr."createdAt" >= ${startDate} AND pr."createdAt" <= ${endDate}
+            GROUP BY prl."itemId"
           )
           SELECT
             i.name AS itemname,
-            COALESCE(rs.qty, 0) + COALESCE(ps.qty, 0) AS qtysold,
-            COALESCE(rs.revenue, 0) + COALESCE(ps.revenue, 0) AS revenue
+            GREATEST(0, COALESCE(rs.qty, 0) + COALESCE(ps.qty, 0) - COALESCE(sret.qty, 0) - COALESCE(pret.qty, 0)) AS qtysold,
+            GREATEST(0, COALESCE(rs.revenue, 0) + COALESCE(ps.revenue, 0) - COALESCE(sret.revenue, 0) - COALESCE(pret.revenue, 0)) AS revenue
           FROM items i
           LEFT JOIN regular_sales_agg rs ON rs."itemId" = i.id
           LEFT JOIN pos_sales_agg ps ON ps."itemId" = i.id
+          LEFT JOIN sales_returns_agg sret ON sret."itemId" = i.id
+          LEFT JOIN pos_returns_agg pret ON pret."itemId" = i.id
           WHERE rs."itemId" IS NOT NULL OR ps."itemId" IS NOT NULL
           ORDER BY revenue DESC
           LIMIT 5;
         `;
-
-      console.log(topProducts);
 
       res.json(topProducts);
     } catch (error) {
@@ -214,27 +295,36 @@ export class DashboardController {
 
   async getTopCustomers(req: AuthRequest, res: Response) {
     try {
-      const now = new Date();
-      const startDate = new Date(
-        Date.UTC(now.getFullYear(), now.getMonth(), 1),
-      );
-      const endDate = new Date();
+      const { startDate, endDate } = getDateRange(req.query);
       const topCustomers = await prisma.$queryRaw`
   SELECT
     c.name AS "customerName",
 
-    COALESCE(
-      SUM(
-        CASE
-          WHEN s.status IN ('INVOICED', 'PAID')
-          AND s."orderDate" >= ${startDate}
-          AND s."orderDate" <= ${endDate}
-          THEN s."totalAmount"
-          ELSE 0
-        END
-      ),
-      0
-    )::numeric AS "totalPurchased",
+    GREATEST(0,
+      COALESCE(
+        SUM(
+          CASE
+            WHEN s.status IN ('INVOICED', 'PAID')
+            AND s."orderDate" >= ${startDate}
+            AND s."orderDate" <= ${endDate}
+            THEN s."totalAmount"
+            ELSE 0
+          END
+        ),
+        0
+      )::numeric
+      - COALESCE(
+        (
+          SELECT SUM(sr."totalAmount")
+          FROM sales_returns sr
+          WHERE sr."customerId" = c.id
+            AND sr.status = 'CONFIRMED'
+            AND sr."returnDate" >= ${startDate}
+            AND sr."returnDate" <= ${endDate}
+        ),
+        0
+      )::numeric
+    ) AS "totalPurchased",
 
     COALESCE(
       SUM(
@@ -256,7 +346,6 @@ export class DashboardController {
   LIMIT 5
 `;
 
-      // console.log(topCustomers);
       res.json(topCustomers);
     } catch (error) {
       console.error(error);
@@ -266,9 +355,7 @@ export class DashboardController {
 
   async getExpenseBreakdown(req: AuthRequest, res: Response) {
     try {
-      const now = new Date();
-      const startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-      const endDate = new Date();
+      const { startDate, endDate } = getDateRange(req.query);
       const breakdown = await prisma.$queryRaw`
   SELECT 
     category,
@@ -308,7 +395,6 @@ export class DashboardController {
   GROUP BY category
   ORDER BY amount DESC;
 `;
-      // console.log(breakdown);
 
       res.json(breakdown);
     } catch (error) {
@@ -322,7 +408,6 @@ export class DashboardController {
       const now = new Date();
       const oneMonthAgo = new Date();
       oneMonthAgo.setMonth(now.getMonth() - 1);
-      // console.log("Fetching alerts for date range:", oneMonthAgo, "to", now);
       const lowStockItems = await prisma.$queryRaw`
   SELECT
     i.name AS "itemName",
@@ -391,3 +476,4 @@ export class DashboardController {
     }
   }
 }
+

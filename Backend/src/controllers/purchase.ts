@@ -4,6 +4,8 @@ import {
   createPurchaseSchema,
   receivePurchaseSchema,
   createVendorSchema,
+  confirmPurchaseReturnSchema,
+  createPurchaseReturnSchema,
 } from "../types/purchase";
 import { AuthRequest } from "../middleware/auth";
 import { CostingService } from "../services/costing";
@@ -12,6 +14,35 @@ import { GeneralLedgerService } from "../services/gl";
 const prisma = new PrismaClient();
 const costingService = new CostingService();
 const glService = new GeneralLedgerService();
+
+async function getReturnablePurchaseQuantities(purchaseId: string) {
+  const purchaseLines = await prisma.purchaseLine.findMany({
+    where: { purchaseId },
+    include: { item: true },
+  });
+
+  const returned = await prisma.purchaseReturnLine.groupBy({
+    by: ["purchaseLineId"],
+    where: {
+      purchaseReturn: { purchaseId, status: "CONFIRMED" },
+    },
+    _sum: { qty: true },
+  });
+
+  const returnedMap = new Map(
+    returned.map((r) => [r.purchaseLineId, Number(r._sum.qty || 0)]),
+  );
+
+  return purchaseLines.map((line) => ({
+    purchaseLineId: line.id,
+    itemId: line.itemId,
+    item: line.item,
+    originalQty: Number(line.qty),
+    unitPrice: Number(line.unitPrice),
+    alreadyReturned: returnedMap.get(line.id) || 0,
+    returnable: Number(line.qty) - (returnedMap.get(line.id) || 0),
+  }));
+}
 
 export class PurchaseController {
   async getPurchases(req: AuthRequest, res: Response) {
@@ -318,6 +349,384 @@ export class PurchaseController {
     } catch (error) {
       console.error("Invoice purchase error:", error);
       res.status(400).json({ error: "Failed to invoice purchase" });
+    }
+  }
+
+  async getReturnableLines(req: AuthRequest, res: Response) {
+    try {
+      const { purchaseId } = req.params;
+
+      const purchase = await prisma.purchase.findUnique({
+        where: { id: purchaseId },
+      });
+      if (!purchase) {
+        return res.status(404).json({ error: "Purchase not found" });
+      }
+      if (
+        !["RECEIVED", "INVOICED", "PAID", "PARTIALLY_PAID"].includes(
+          purchase.status,
+        )
+      ) {
+        return res.status(400).json({
+          error:
+            "Only received, invoiced or paid purchases can be returned",
+        });
+      }
+
+      const lines = await getReturnablePurchaseQuantities(purchaseId);
+      res.json({ purchase, lines });
+    } catch (error) {
+      console.error("Get returnable purchase lines error:", error);
+      res
+        .status(500)
+        .json({ error: "Failed to fetch returnable purchase lines" });
+    }
+  }
+
+  async createPurchaseReturn(req: AuthRequest, res: Response) {
+    try {
+      const validatedData = createPurchaseReturnSchema.parse(req.body);
+
+      const purchaseReturn = await prisma.$transaction(
+        async (tx) => {
+          const purchase = await tx.purchase.findUnique({
+            where: { id: validatedData.purchaseId },
+          });
+          if (!purchase) throw new Error("Purchase not found");
+
+          const returnable = await getReturnablePurchaseQuantities(
+            validatedData.purchaseId,
+          );
+          const returnableMap = new Map(
+            returnable.map((r) => [r.purchaseLineId, r]),
+          );
+
+          let subtotal = 0;
+          const lineData: {
+            purchaseLineId: string;
+            itemId: string;
+            qty: number;
+            unitPrice: number;
+            lineTotal: number;
+          }[] = [];
+
+          for (const line of validatedData.returnLines) {
+            const info = returnableMap.get(line.purchaseLineId);
+            if (!info) {
+              throw new Error(
+                `Purchase line ${line.purchaseLineId} not found on this purchase`,
+              );
+            }
+            if (line.qty > info.returnable) {
+              throw new Error(
+                `Cannot return ${line.qty} units of ${info.item.name}. Only ${info.returnable} unit(s) remain available for return.`,
+              );
+            }
+
+            const lineTotal = line.qty * info.unitPrice;
+            subtotal += lineTotal;
+
+            lineData.push({
+              purchaseLineId: line.purchaseLineId,
+              itemId: line.itemId,
+              qty: line.qty,
+              unitPrice: info.unitPrice,
+              lineTotal,
+            });
+          }
+
+          const lastReturn = await tx.purchaseReturn.findFirst({
+            orderBy: { createdAt: "desc" },
+          });
+          let nextNumber = 1;
+          if (lastReturn) {
+            const match = lastReturn.returnNo.match(/\d+$/);
+            if (match) nextNumber = parseInt(match[0], 10) + 1;
+          }
+          const returnNo = `PR${String(nextNumber).padStart(6, "0")}`;
+
+          const newReturn = await tx.purchaseReturn.create({
+            data: {
+              returnNo,
+              purchaseId: purchase.id,
+              vendorId: purchase.vendorId,
+              reason: validatedData.reason,
+              subtotal,
+              tax: 0,
+              totalAmount: subtotal,
+              status: "DRAFT",
+              preparedBy: req.user!.id,
+            },
+          });
+
+          for (const line of lineData) {
+            await tx.purchaseReturnLine.create({
+              data: { purchaseReturnId: newReturn.id, ...line, unitCost: 0 },
+            });
+          }
+
+          return newReturn;
+        },
+        { maxWait: 5000, timeout: 20000 },
+      );
+
+      res.status(201).json(purchaseReturn);
+    } catch (error: any) {
+      console.error("Create purchase return error:", error);
+      res
+        .status(400)
+        .json({ error: error.message || "Failed to create purchase return" });
+    }
+  }
+
+  async confirmPurchaseReturn(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      const validatedData = confirmPurchaseReturnSchema.parse(req.body);
+
+      await prisma.$transaction(
+        async (tx) => {
+          const purchaseReturn = await tx.purchaseReturn.findUnique({
+            where: { id },
+            include: {
+              purchaseReturnLines: { include: { item: true } },
+              purchase: true,
+            },
+          });
+
+          if (!purchaseReturn) throw new Error("Purchase return not found");
+          if (purchaseReturn.status !== "DRAFT") {
+            throw new Error(
+              `Purchase return ${purchaseReturn.returnNo} is not in DRAFT status`,
+            );
+          }
+
+          const returnable = await getReturnablePurchaseQuantities(
+            purchaseReturn.purchaseId,
+          );
+          const returnableMap = new Map(
+            returnable.map((r) => [r.purchaseLineId, r]),
+          );
+
+          let totalApAmount = 0;
+          let totalInventoryValue = 0;
+
+          for (const line of purchaseReturn.purchaseReturnLines) {
+            const info = returnableMap.get(line.purchaseLineId);
+            if (!info || Number(line.qty) > info.returnable) {
+              throw new Error(
+                `Return quantity for ${line.item.name} exceeds what remains returnable`,
+              );
+            }
+
+            const { unitCost, value } = await costingService.issueInventory(
+              tx,
+              line.itemId,
+              validatedData.warehouseId,
+              Number(line.qty),
+              "PURCHASE_RETURN",
+              purchaseReturn.id,
+              req.user!.id,
+            );
+
+            totalApAmount += Number(line.qty) * Number(line.unitPrice);
+            totalInventoryValue += value;
+
+            await tx.purchaseReturnLine.update({
+              where: { id: line.id },
+              data: { unitCost },
+            });
+          }
+
+          const costVariance = totalApAmount - totalInventoryValue;
+
+          const itemType = await getItemTypeById(
+            purchaseReturn.purchaseReturnLines[0].itemId,
+          );
+          const inventoryAccountCode =
+            itemType === "FINISHED_GOODS" ? "1350" : "1300";
+
+          const journalLines = [
+            {
+              accountCode: "2000",
+              debit: totalApAmount,
+              credit: 0,
+              refType: "PURCHASE_RETURN",
+              refId: id,
+            },
+            {
+              accountCode: inventoryAccountCode,
+              debit: 0,
+              credit: totalInventoryValue,
+              refType: "PURCHASE_RETURN",
+              refId: id,
+            },
+          ];
+
+          if (Math.abs(costVariance) > 0.005) {
+            journalLines.push(
+              costVariance > 0
+                ? {
+                    accountCode: "5900",
+                    debit: 0,
+                    credit: costVariance,
+                    refType: "PURCHASE_RETURN",
+                    refId: id,
+                  }
+                : {
+                    accountCode: "5900",
+                    debit: Math.abs(costVariance),
+                    credit: 0,
+                    refType: "PURCHASE_RETURN",
+                    refId: id,
+                  },
+            );
+          }
+
+          await glService.postJournal(
+            tx,
+            journalLines,
+            `Purchase return: ${purchaseReturn.returnNo} (${purchaseReturn.purchase.orderNo})`,
+            req.user!.id,
+          );
+
+          await tx.purchaseReturn.update({
+            where: { id },
+            data: {
+              status: "CONFIRMED",
+              settlementMethod: validatedData.settlementMethod,
+              inventoryValue: totalInventoryValue,
+              costVariance,
+              confirmedBy: req.user!.id,
+              confirmedAt: new Date(),
+            },
+          });
+
+          const cashAccountId = validatedData.cashAccountId;
+          if (
+            validatedData.settlementMethod === "REFUND_CASH" &&
+            cashAccountId
+          ) {
+            const cashAccount = await tx.cashAccount.findUnique({
+              where: { id: cashAccountId },
+            });
+
+            if (!cashAccount) {
+              throw new Error("Cash account not found");
+            }
+            const glAccount = await tx.chartOfAccount.findUnique({
+              where: { id: cashAccount.glAccountId },
+            });
+            if (glAccount) {
+              await glService.postJournal(
+                tx,
+                [
+                  {
+                    accountCode: "2000",
+                    debit: 0,
+                    credit: totalApAmount,
+                    refType: "PURCHASE_RETURN_REFUND",
+                    refId: id,
+                  },
+                  {
+                    accountCode: glAccount.code,
+                    debit: totalApAmount,
+                    credit: 0,
+                    refType: "PURCHASE_RETURN_REFUND",
+                    refId: id,
+                  },
+                ],
+                `Cash refund for return ${purchaseReturn.returnNo}`,
+                req.user!.id,
+              );
+
+              await tx.cashAccount.update({
+                where: { id: cashAccount.id },
+                data: {
+                  balance: {
+                    increment: totalApAmount,
+                  },
+                },
+              });
+            } else {
+              throw new Error("Refund Cash Account not found");
+            }
+          }
+        },
+        { maxWait: 5000, timeout: 20000 },
+      );
+
+      res.json({ message: "Purchase return confirmed successfully" });
+    } catch (error: any) {
+      console.error("Confirm purchase return error:", error);
+      res
+        .status(400)
+        .json({ error: error.message || "Failed to confirm purchase return" });
+    }
+  }
+
+  async getPurchaseReturns(req: AuthRequest, res: Response) {
+    try {
+      const { page = 1, limit = 10, status, vendorId } = req.query;
+      const skip = (Number(page) - 1) * Number(limit);
+
+      const where: any = {};
+      if (status) where.status = status;
+      if (vendorId) where.vendorId = vendorId;
+
+      const [returns, total] = await Promise.all([
+        prisma.purchaseReturn.findMany({
+          where,
+          skip,
+          take: Number(limit),
+          include: {
+            vendor: { select: { code: true, name: true } },
+            purchase: { select: { orderNo: true } },
+            preparer: { select: { name: true } },
+            purchaseReturnLines: {
+              include: { item: { select: { sku: true, name: true } } },
+            },
+          },
+          orderBy: { createdAt: "desc" },
+        }),
+        prisma.purchaseReturn.count({ where }),
+      ]);
+
+      res.json({
+        purchaseReturns: returns,
+        pagination: {
+          page: Number(page),
+          limit: Number(limit),
+          total,
+          pages: Math.ceil(total / Number(limit)),
+        },
+      });
+    } catch (error) {
+      console.error("Get purchase returns error:", error);
+      res.status(500).json({ error: "Failed to fetch purchase returns" });
+    }
+  }
+
+  async cancelPurchaseReturn(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      const updated = await prisma.purchaseReturn.updateMany({
+        where: { id, status: "DRAFT" },
+        data: {
+          status: "CANCELLED",
+          cancelledBy: req.user!.id,
+          cancelledAt: new Date(),
+        },
+      });
+      if (updated.count === 0) {
+        throw new Error("Only draft returns can be cancelled");
+      }
+      res.json({ message: "Purchase return cancelled successfully" });
+    } catch (error: any) {
+      console.error("Cancel purchase return error:", error);
+      res
+        .status(400)
+        .json({ error: error.message || "Failed to cancel purchase return" });
     }
   }
 

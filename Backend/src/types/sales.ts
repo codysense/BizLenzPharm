@@ -37,6 +37,31 @@ export const createCustomerSchema = z.object({
   customerGroupId: z.string().optional(),
 });
 
+export const createSalesReturnSchema = z.object({
+  saleId: z.string().min(1, "Sale is required"),
+  reason: z.string().optional(),
+  returnLines: z
+    .array(
+      z.object({
+        saleLineId: z.string().min(1),
+        itemId: z.string().min(1),
+        qty: z.number().positive("Quantity must be positive"),
+      }),
+    )
+    .min(1, "At least one line item is required"),
+});
+
+export const confirmSalesReturnSchema = z.object({
+  cashAccountId: z.string().optional(),
+  warehouseId: z.string().min(1, "Warehouse is required"),
+  settlementMethod: z.enum(["REFUND_CASH", "CUSTOMER_CREDIT"]),
+  applyToSaleId: z.string().optional(),
+});
+
 export type CreateSaleRequest = z.infer<typeof createSaleSchema>;
 export type DeliverSaleRequest = z.infer<typeof deliverSaleSchema>;
 export type CreateCustomerRequest = z.infer<typeof createCustomerSchema>;
+export type CreateSalesReturnRequest = z.infer<typeof createSalesReturnSchema>;
+export type ConfirmSalesReturnRequest = z.infer<
+  typeof confirmSalesReturnSchema
+>;

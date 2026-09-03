@@ -79,6 +79,32 @@ export const createVendorSchema = z.object({
   paymentTerms: z.string().optional(),
 });
 
+export const createPurchaseReturnSchema = z.object({
+  purchaseId: z.string().min(1, "Purchase is required"),
+  reason: z.string().optional(),
+  returnLines: z
+    .array(
+      z.object({
+        purchaseLineId: z.string().min(1),
+        itemId: z.string().min(1),
+        qty: z.number().positive("Quantity must be positive"),
+      }),
+    )
+    .min(1, "At least one line item is required"),
+});
+
+export const confirmPurchaseReturnSchema = z.object({
+  cashAccountId: z.string().optional(),
+  warehouseId: z.string().min(1, "Warehouse is required"),
+  settlementMethod: z.enum(["REFUND_CASH", "SUPPLIER_CREDIT"]),
+});
+
 export type CreatePurchaseRequest = z.infer<typeof createPurchaseSchema>;
 export type CreateVendorRequest = z.infer<typeof createVendorSchema>;
 export type ReceivePurchaseRequest = z.infer<typeof receivePurchaseSchema>;
+export type CreatePurchaseReturnRequest = z.infer<
+  typeof createPurchaseReturnSchema
+>;
+export type ConfirmPurchaseReturnRequest = z.infer<
+  typeof confirmPurchaseReturnSchema
+>;

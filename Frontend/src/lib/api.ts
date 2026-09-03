@@ -394,6 +394,27 @@ export const productionApi = {
 
 // Purchase API
 export const purchaseApi = {
+  //  Purchase Returns
+  getReturnableLines: (purchaseId: string) =>
+    api.get(`/purchase/purchase-returns/returnable-lines/${purchaseId}`),
+  createPurchaseReturn: (data: any) =>
+    api.post("/purchase/purchase-returns/create", data),
+  confirmPurchaseReturn: (id: string, data: any) =>
+    api.post(`/purchase/purchase-returns/confirm/${id}`, data),
+  getPurchaseReturns: (params?: {
+    page?: number;
+    limit?: number;
+    status?: string;
+    vendorId?: string;
+  }) =>
+    api.get(
+      `/purchase/purchase-returns${
+        params ? "?" + new URLSearchParams(params as any).toString() : ""
+      }`,
+    ),
+  cancelPurchaseReturn: (id: string) =>
+    api.post(`/purchase/purchase-returns/${id}/cancel`),
+
   getPurchases: (params?: {
     page?: number;
     limit?: number;
@@ -445,15 +466,57 @@ export const openingStockApi = {
 };
 //Dashboard API
 export const dashboardApi = {
-  getExpenseBreakdown: () => api.get("/dashboard/expense-breakdown"),
+  getExpenseBreakdown: (params?: { period?: string; startDate?: string; endDate?: string }) =>
+    api.get(
+      `/dashboard/expense-breakdown${
+        params ? "?" + new URLSearchParams(params as any).toString() : ""
+      }`,
+    ),
   getAlerts: () => api.get("/dashboard/alerts"),
-  getTopProducts: () => api.get("/dashboard/top-products"),
-  getTopCustomers: () => api.get("/dashboard/top-customers"),
-  getExecutiveSummary: () => api.get("/dashboard/executive-summary"),
+  getTopProducts: (params?: { period?: string; startDate?: string; endDate?: string }) =>
+    api.get(
+      `/dashboard/top-products${
+        params ? "?" + new URLSearchParams(params as any).toString() : ""
+      }`,
+    ),
+  getTopCustomers: (params?: { period?: string; startDate?: string; endDate?: string }) =>
+    api.get(
+      `/dashboard/top-customers${
+        params ? "?" + new URLSearchParams(params as any).toString() : ""
+      }`,
+    ),
+  getExecutiveSummary: (params?: { period?: string; startDate?: string; endDate?: string }) =>
+    api.get(
+      `/dashboard/executive-summary${
+        params ? "?" + new URLSearchParams(params as any).toString() : ""
+      }`,
+    ),
 };
 
 // Sales API
 export const salesApi = {
+  getSalesReturns: (params?: {
+    page?: number;
+    limit?: number;
+    status?: string;
+    customerId?: string;
+  }) =>
+    api.get(
+      `/sales/sales-returns/get-sales-returns${
+        params ? "?" + new URLSearchParams(params as any).toString() : ""
+      }`,
+    ),
+
+  cancelSalesReturn: (id: string) =>
+    api.post(`/sales/sales-return/cancel/${id}`),
+
+  getReturnableLines: (saleId: string) =>
+    api.get(`/sales/sales-return/returnable-lines/${saleId}`),
+
+  createSalesReturn: (data: any) => api.post("/sales/sales-return/", data),
+  confirmSalesReturn: (id: string, data: any) =>
+    api.post(`/sales/sales-return/confirm/${id}`, data),
+
   getSales: (params?: {
     page?: number;
     limit?: number;

@@ -908,6 +908,19 @@ FROM (
 
   UNION ALL
 
+  /* ---------------- SALES RETURNS (CREDIT AR) ---------------- */
+  /* Only returns settled as customer credit or applied to another
+     invoice actually move the AR balance. REFUND_CASH returns net
+     to zero on AR (base return credit + cash-refund debit cancel out),
+     so they're intentionally excluded here. */
+  SELECT -str."totalAmount" AS balance
+  FROM sales_returns str
+  WHERE str."customerId" = $1
+    AND str.status = 'CONFIRMED'
+    AND str."settlementMethod" IN ('CUSTOMER_CREDIT', 'APPLY_TO_INVOICE')
+    AND str."returnDate" < $2
+
+  UNION ALL
   /* ---------------- REFUNDS (DEBIT) ---------------- */
   SELECT srr."amountRefunded" AS balance
   FROM sales_refunds srr
@@ -999,6 +1012,29 @@ WHERE c.id = $1
   AND cp.status = 'PAID'
   AND cp."paymentDate" >= $2
   AND cp."paymentDate" < ($3 + INTERVAL '1 day')
+
+UNION ALL
+
+/* ---------------- SALES RETURNS (AR CREDIT) ---------------- */
+SELECT
+  'CUSTOMER' AS type,
+  c."code" AS account_code,
+  c."name" AS account_name,
+  'SALES_RETURN' AS transaction_type,
+  sr."returnNo" AS reference,
+  sr."returnDate" AS date,
+  0 AS debit,
+  sr."totalAmount" AS credit,
+  sr."totalAmount" AS amount,
+  CONCAT('Sales return against ', so."orderNo") AS description
+FROM sales_returns sr
+INNER JOIN customers c ON sr."customerId" = c.id
+INNER JOIN sales so ON sr."saleId" = so.id
+WHERE c.id = $1
+  AND sr.status = 'CONFIRMED'
+  AND sr."settlementMethod" IN ('CUSTOMER_CREDIT', 'APPLY_TO_INVOICE')
+  AND sr."returnDate" >= $2
+  AND sr."returnDate" < ($3 + INTERVAL '1 day')
 
 UNION ALL
 
@@ -1121,6 +1157,18 @@ FROM (
     WHERE vp."vendorId" = $1
       AND vp.status = 'PAID'
       AND vp."paymentDate" < $2
+    UNION ALL
+
+    /* PURCHASE RETURNS (AP CLEARING) */
+    /* Only SUPPLIER_CREDIT returns reduce AP. REFUND_CASH returns net
+       to zero on AP — the base return debit is reversed by the cash
+       refund's AP credit — so they're excluded here. */
+    SELECT -pret."totalAmount" AS balance
+    FROM purchase_returns pret
+    WHERE pret."vendorId" = $1
+      AND pret.status = 'CONFIRMED'
+      AND pret."settlementMethod" = 'SUPPLIER_CREDIT'
+      AND pret."returnDate" < $2
 
     UNION ALL
 
@@ -1222,6 +1270,29 @@ GROUP BY vp.id, v."code", v."name"
 
 UNION ALL
 
+/* ---------------- PURCHASE RETURNS (AP DEBIT) ---------------- */
+SELECT
+    'VENDOR' AS type,
+    v."code" AS account_code,
+    v."name" AS account_name,
+    'PURCHASE_RETURN' AS transaction_type,
+    pret."returnNo" AS reference,
+    pret."returnDate" AS date,
+    pret."totalAmount" AS debit,
+    0 AS credit,
+    -pret."totalAmount" AS balance,
+    CONCAT('Purchase return against ', po."orderNo") AS description
+FROM purchase_returns pret
+INNER JOIN vendors v ON pret."vendorId" = v."id"
+INNER JOIN purchases po ON pret."purchaseId" = po.id
+WHERE v."id" = $1
+  AND pret.status = 'CONFIRMED'
+  AND pret."settlementMethod" = 'SUPPLIER_CREDIT'
+  AND pret."returnDate" >= $2
+  AND pret."returnDate" < ($3 + INTERVAL '1 day')
+
+UNION ALL
+
 /* ---------------- PURCHASE REFUNDS / CREDIT NOTES ---------------- */
 SELECT 
     'VENDOR' AS type,
@@ -1269,7 +1340,7 @@ SELECT
     'CREDIT_MEMO' AS transaction_type,
     m."memoNo" AS reference,
     m."date" AS date,
-    0 AS debit,
+    0 AS credit,
     m."amount" AS credit,
     m."amount" AS balance,
     m."description" AS description
@@ -1336,6 +1407,7 @@ ORDER BY date, transaction_type, reference;
         vendor_name: string;
         total_purchases: number;
         total_payments: number;
+        total_returns: number;
         // total_refunds: number;
         outstanding_balance: number;
       }[]
@@ -1348,12 +1420,14 @@ ORDER BY date, transaction_type, reference;
 
     COALESCE(p.total_purchases, 0) AS total_purchases,
     COALESCE(pay.total_payments, 0) AS total_payments,
+    COALESCE(pret.total_returns, 0) AS total_returns,
     COALESCE(r.total_refunds, 0) AS total_refunds,
     COALESCE(dm.total_debit_memos, 0) AS total_debit_memos,
     COALESCE(cm.total_credit_memos, 0) AS total_credit_memos,
 
     COALESCE(p.total_purchases, 0)
       - COALESCE(pay.total_payments, 0)
+      - COALESCE(pret.total_returns, 0)
       - COALESCE(r.total_refunds, 0)
       - COALESCE(dm.total_debit_memos, 0)
       + COALESCE(cm.total_credit_memos, 0)
@@ -1388,6 +1462,18 @@ LEFT JOIN (
     GROUP BY vp."vendorId"
 ) pay ON pay."vendorId" = v.id
 
+/* PURCHASE RETURNS (SUPPLIER_CREDIT only — reduce AP) */
+LEFT JOIN (
+    SELECT
+        "vendorId",
+        SUM("totalAmount") AS total_returns
+    FROM purchase_returns
+    WHERE "returnDate" <= $1
+      AND status = 'CONFIRMED'
+      AND "settlementMethod" = 'SUPPLIER_CREDIT'
+    GROUP BY "vendorId"
+) pret ON pret."vendorId" = v.id
+
 /* REFUNDS */
 LEFT JOIN (
     SELECT 
@@ -1418,6 +1504,7 @@ LEFT JOIN (
     FROM memo
     WHERE "memoType" = 'CREDIT'
       AND "date" <= $1
+      AND "vendorId" IS NOT NULL
     GROUP BY "vendorId"
 ) cm ON cm."vendorId" = v.id
 

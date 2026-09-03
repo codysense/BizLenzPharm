@@ -150,6 +150,7 @@ const Layout = ({ children }: LayoutProps) => {
       children: [
         { name: "Orders", href: "/purchases/orders" },
         { name: "Vendors", href: "/purchases/vendors" },
+        { name: "Purchase Returns", href: "/purchases/purchase-returns" },
         // { name: 'Memos', href: '/purchases/memos' },
       ],
     },
@@ -170,6 +171,7 @@ const Layout = ({ children }: LayoutProps) => {
         { name: "Orders", href: "/sales/orders" },
         { name: "Customers", href: "/sales/customers" },
         { name: "CustomerGroups", href: "/sales/customergroups" },
+        { name: "Sales Returns", href: "/sales/sales-returns" },
         //   { name: 'Memos', href: '/sales/memos' },
       ],
     },

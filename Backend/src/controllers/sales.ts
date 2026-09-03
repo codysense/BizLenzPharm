@@ -4,6 +4,8 @@ import {
   createCustomerSchema,
   createSaleSchema,
   deliverSaleSchema,
+  createSalesReturnSchema,
+  confirmSalesReturnSchema,
 } from "../types/sales";
 import { AuthRequest } from "../middleware/auth";
 import { CostingService } from "../services/costing";
@@ -18,6 +20,63 @@ const createCustomerGroupSchema = z.object({
   code: z.string().optional(),
   description: z.string().optional(),
 });
+
+async function getReturnableQuantities(saleId: string) {
+  const saleLines = await prisma.saleLine.findMany({
+    where: { saleId },
+    include: { item: true },
+  });
+
+  const returned = await prisma.salesReturnLine.groupBy({
+    by: ["saleLineId"],
+    where: {
+      salesReturn: { saleId, status: "CONFIRMED" },
+    },
+    _sum: { qty: true },
+  });
+
+  const returnedMap = new Map(
+    returned.map((r) => [r.saleLineId, Number(r._sum.qty || 0)]),
+  );
+
+  return saleLines.map((line) => ({
+    saleLineId: line.id,
+    itemId: line.itemId,
+    item: line.item,
+    originalQty: Number(line.qty),
+    unitPrice: Number(line.unitPrice),
+    alreadyReturned: returnedMap.get(line.id) || 0,
+    returnable: Number(line.qty) - (returnedMap.get(line.id) || 0),
+  }));
+}
+
+async function getSaleIssueUnitCost(
+  tx: Prisma.TransactionClient,
+  saleId: string,
+  itemId: string,
+) {
+  const issued = await tx.inventoryLedger.groupBy({
+    by: ["itemId"],
+    where: {
+      refType: "SALE",
+      refId: saleId,
+      itemId,
+      direction: "OUT",
+    },
+    _sum: { qty: true, value: true },
+  });
+
+  if (!issued.length || !issued[0]._sum.qty) {
+    throw new Error(
+      `No inventory issue found for item ${itemId} on sale ${saleId}`,
+    );
+  }
+
+  const totalQty = Number(issued[0]._sum.qty);
+  const totalValue = Number(issued[0]._sum.value);
+
+  return Math.abs(totalValue) / totalQty;
+}
 
 export class SalesController {
   async getSales(req: AuthRequest, res: Response) {
@@ -284,6 +343,364 @@ export class SalesController {
     } catch (error) {
       console.error("Invoice sale error:", error);
       res.status(400).json({ error: "Failed to invoice sale" });
+    }
+  }
+
+  async getReturnableLines(req: AuthRequest, res: Response) {
+    try {
+      const { saleId } = req.params;
+
+      const sale = await prisma.sale.findUnique({ where: { id: saleId } });
+      if (!sale) {
+        return res.status(404).json({ error: "Sale not found" });
+      }
+      if (!["DELIVERED", "INVOICED", "PAID"].includes(sale.status)) {
+        return res.status(400).json({
+          error: "Only delivered, invoiced or paid sales can be returned",
+        });
+      }
+
+      const lines = await getReturnableQuantities(saleId);
+      res.json({ sale, lines });
+    } catch (error) {
+      console.error("Get returnable lines error:", error);
+      res.status(500).json({ error: "Failed to fetch returnable lines" });
+    }
+  }
+
+  async createSalesReturn(req: AuthRequest, res: Response) {
+    try {
+      const validatedData = createSalesReturnSchema.parse(req.body);
+
+      const salesReturn = await prisma.$transaction(
+        async (tx) => {
+          const sale = await tx.sale.findUnique({
+            where: { id: validatedData.saleId },
+          });
+          if (!sale) throw new Error("Sale not found");
+
+          const returnable = await getReturnableQuantities(
+            validatedData.saleId,
+          );
+          const returnableMap = new Map(
+            returnable.map((r) => [r.saleLineId, r]),
+          );
+
+          let subtotal = 0;
+          const lineData: {
+            saleLineId: string;
+            itemId: string;
+            qty: number;
+            unitPrice: number;
+            lineTotal: number;
+          }[] = [];
+
+          for (const line of validatedData.returnLines) {
+            const info = returnableMap.get(line.saleLineId);
+            if (!info) {
+              throw new Error(
+                `Sale line ${line.saleLineId} not found on this sale`,
+              );
+            }
+            if (line.qty > info.returnable) {
+              throw new Error(
+                `Cannot return ${line.qty} units of ${info.item.name}. Only ${info.returnable} unit(s) remain available for return.`,
+              );
+            }
+
+            const lineTotal = line.qty * info.unitPrice;
+            subtotal += lineTotal;
+
+            lineData.push({
+              saleLineId: line.saleLineId,
+              itemId: line.itemId,
+              qty: line.qty,
+              unitPrice: info.unitPrice,
+              lineTotal,
+            });
+          }
+
+          const lastReturn = await tx.salesReturn.findFirst({
+            orderBy: { createdAt: "desc" },
+          });
+          let nextNumber = 1;
+          if (lastReturn) {
+            nextNumber =
+              parseInt(lastReturn.returnNo.replace(/^SR/, ""), 10) + 1;
+          }
+          const returnNo = `SR${String(nextNumber).padStart(6, "0")}`;
+
+          const newReturn = await tx.salesReturn.create({
+            data: {
+              returnNo,
+              saleId: sale.id,
+              customerId: sale.customerId,
+              reason: validatedData.reason,
+              subtotal,
+              tax: 0,
+              totalAmount: subtotal,
+              status: "DRAFT",
+              preparedBy: req.user!.id,
+            },
+          });
+
+          for (const line of lineData) {
+            await tx.salesReturnLine.create({
+              data: { salesReturnId: newReturn.id, ...line, unitCost: 0 },
+            });
+          }
+
+          return newReturn;
+        },
+        { maxWait: 5000, timeout: 20000 },
+      );
+
+      res.status(201).json(salesReturn);
+    } catch (error: any) {
+      console.error("Create sales return error:", error);
+      res
+        .status(400)
+        .json({ error: error.message || "Failed to create sales return" });
+    }
+  }
+
+  async confirmSalesReturn(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      const validatedData = confirmSalesReturnSchema.parse(req.body);
+
+      await prisma.$transaction(
+        async (tx) => {
+          const salesReturn = await tx.salesReturn.findUnique({
+            where: { id },
+            include: {
+              salesReturnLines: { include: { item: true } },
+              sale: { include: { saleLines: true } },
+            },
+          });
+
+          if (!salesReturn) throw new Error("Sales return not found");
+          if (salesReturn.status !== "DRAFT") {
+            throw new Error(
+              `Sales return ${salesReturn.returnNo} is not in DRAFT status`,
+            );
+          }
+
+          const returnable = await getReturnableQuantities(salesReturn.saleId);
+          const returnableMap = new Map(
+            returnable.map((r) => [r.saleLineId, r]),
+          );
+
+          let totalCostReversal = 0;
+
+          for (const line of salesReturn.salesReturnLines) {
+            const info = returnableMap.get(line.saleLineId);
+            if (!info || Number(line.qty) > info.returnable) {
+              throw new Error(
+                `Return quantity for ${line.item.name} exceeds what remains returnable`,
+              );
+            }
+
+            const unitCost = await getSaleIssueUnitCost(
+              tx,
+              salesReturn.saleId,
+              line.itemId,
+            );
+
+            await costingService.receiveInventory(
+              tx,
+              line.itemId,
+              validatedData.warehouseId,
+              Number(line.qty),
+              unitCost,
+              "SALES_RETURN",
+              salesReturn.id,
+              req.user!.id,
+            );
+
+            const lineCost = unitCost * Number(line.qty);
+            totalCostReversal += lineCost;
+
+            await tx.salesReturnLine.update({
+              where: { id: line.id },
+              data: { unitCost },
+            });
+          }
+
+          const itemType = await getItemTypeById(
+            salesReturn.salesReturnLines[0].itemId,
+          );
+
+          await glService.postJournal(
+            tx,
+            [
+              {
+                accountCode: "4900",
+                debit: Number(salesReturn.totalAmount),
+                credit: 0,
+                refType: "SALES_RETURN",
+                refId: id,
+              },
+              {
+                accountCode: "1200",
+                debit: 0,
+                credit: Number(salesReturn.totalAmount),
+                refType: "SALES_RETURN",
+                refId: id,
+              },
+              {
+                accountCode: itemType === "FINISHED_GOODS" ? "1350" : "1300",
+                debit: totalCostReversal,
+                credit: 0,
+                refType: "SALES_RETURN",
+                refId: id,
+              },
+              {
+                accountCode: "5000",
+                debit: 0,
+                credit: totalCostReversal,
+                refType: "SALES_RETURN",
+                refId: id,
+              },
+            ],
+            `Sales return: ${salesReturn.returnNo} (${salesReturn.sale.orderNo})`,
+            req.user!.id,
+          );
+
+          await tx.salesReturn.update({
+            where: { id },
+            data: {
+              status: "CONFIRMED",
+              settlementMethod: validatedData.settlementMethod,
+              confirmedBy: req.user!.id,
+              confirmedAt: new Date(),
+            },
+          });
+          const cashAccountId = validatedData.cashAccountId;
+          if (
+            validatedData.settlementMethod === "REFUND_CASH" &&
+            cashAccountId
+          ) {
+            const cashAccount = await tx.cashAccount.findUnique({
+              where: { id: cashAccountId },
+            });
+
+            if (!cashAccount) {
+              throw new Error("Cash account not found");
+            }
+            const glAccount = await tx.chartOfAccount.findUnique({
+              where: { id: cashAccount.glAccountId },
+            });
+            if (glAccount) {
+              await glService.postJournal(
+                tx,
+                [
+                  {
+                    accountCode: "1200",
+                    debit: Number(salesReturn.totalAmount),
+                    credit: 0,
+                    refType: "SALES_RETURN_REFUND",
+                    refId: id,
+                  },
+                  {
+                    accountCode: glAccount.code,
+                    debit: 0,
+                    credit: Number(salesReturn.totalAmount),
+                    refType: "SALES_RETURN_REFUND",
+                    refId: id,
+                  },
+                ],
+                `Cash refund for return ${salesReturn.returnNo}`,
+                req.user!.id,
+              );
+
+              await tx.cashAccount.update({
+                where: { id: cashAccount.id },
+                data: {
+                  balance: {
+                    decrement: salesReturn.totalAmount,
+                  },
+                },
+              });
+            } else {
+              throw new Error("Refund Cash Account not found");
+            }
+          }
+        },
+        { maxWait: 5000, timeout: 20000 },
+      );
+
+      res.json({ message: "Sales return confirmed successfully" });
+    } catch (error: any) {
+      console.error("Confirm sales return error:", error);
+      res
+        .status(400)
+        .json({ error: error.message || "Failed to confirm sales return" });
+    }
+  }
+
+  async getSalesReturns(req: AuthRequest, res: Response) {
+    try {
+      const { page = 1, limit = 10, status, customerId } = req.query;
+      const skip = (Number(page) - 1) * Number(limit);
+
+      const where: any = {};
+      if (status) where.status = status;
+      if (customerId) where.customerId = customerId;
+
+      const [returns, total] = await Promise.all([
+        prisma.salesReturn.findMany({
+          where,
+          skip,
+          take: Number(limit),
+          include: {
+            customer: { select: { code: true, name: true } },
+            sale: { select: { orderNo: true } },
+            preparer: { select: { name: true } },
+            salesReturnLines: {
+              include: { item: { select: { sku: true, name: true } } },
+            },
+          },
+          orderBy: { createdAt: "desc" },
+        }),
+        prisma.salesReturn.count({ where }),
+      ]);
+
+      res.json({
+        salesReturns: returns,
+        pagination: {
+          page: Number(page),
+          limit: Number(limit),
+          total,
+          pages: Math.ceil(total / Number(limit)),
+        },
+      });
+    } catch (error) {
+      console.error("Get sales returns error:", error);
+      res.status(500).json({ error: "Failed to fetch sales returns" });
+    }
+  }
+
+  async cancelSalesReturn(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      const updated = await prisma.salesReturn.updateMany({
+        where: { id, status: "DRAFT" },
+        data: {
+          status: "CANCELLED",
+          cancelledBy: req.user!.id,
+          cancelledAt: new Date(),
+        },
+      });
+      if (updated.count === 0) {
+        throw new Error("Only draft returns can be cancelled");
+      }
+      res.json({ message: "Sales return cancelled successfully" });
+    } catch (error: any) {
+      console.error("Cancel sales return error:", error);
+      res
+        .status(400)
+        .json({ error: error.message || "Failed to cancel sales return" });
     }
   }
 

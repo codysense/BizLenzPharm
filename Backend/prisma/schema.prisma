@@ -79,12 +79,22 @@ model User {
   salesInvoiced  Sale[] @relation("SaleInvoicer")
   salesPaid      Sale[] @relation("SalePayer")
 
+  // ───── Sales return stage actors ─────
+  salesReturnsPrepared  SalesReturn[] @relation("SalesReturnPreparer")
+  salesReturnsConfirmed SalesReturn[] @relation("SalesReturnConfirmer")
+  salesReturnsCancelled SalesReturn[] @relation("SalesReturnCanceller")
+
   // ───── Purchase stage actors ─────
   purchasesPrepared Purchase[]     @relation("PurchasePreparer")
   purchasesReceived Purchase[]     @relation("PurchaseReceiver")
   purchasesInvoiced Purchase[]     @relation("PurchaseInvoicer")
   purchasesPaid     Purchase[]     @relation("PurchasePayer")
-  refreshTokens     RefreshToken[]
+
+  // ───── Purchase return stage actors ─────
+  purchaseReturnsPrepared  PurchaseReturn[] @relation("PurchaseReturnPreparer")
+  purchaseReturnsConfirmed PurchaseReturn[] @relation("PurchaseReturnConfirmer")
+  purchaseReturnsCancelled PurchaseReturn[] @relation("PurchaseReturnCanceller")
+  refreshTokens            RefreshToken[]
   UserSession       UserSession[]
 
   openingStocks OpeningStock[]
@@ -241,7 +251,9 @@ model Item {
   posSaleLines          PosSaleLine[]
   productionOrders      ProductionOrder[]
   purchaseLines         PurchaseLine[]
+  purchaseReturnLines   PurchaseReturnLine[]
   saleLines             SaleLine[]
+  salesReturnLines      SalesReturnLine[]
   wipLedgers            WipLedger[]
 
   openingStockLines  OpeningStockLine[]
@@ -462,6 +474,7 @@ model Vendor {
   purchasePayments   PurchasePayment[]
   PurchaseRefund     PurchaseRefund[]
   purchases          Purchase[]
+  purchaseReturns    PurchaseReturn[]
   vendorPaymentLines VendorPaymentLine[]
   vendorPayments     VendorPayment[]
   //relation
@@ -502,6 +515,7 @@ model Customer {
   posSales         PosSale[]
   sales            Sale[]
   salesReceipts    SalesReceipt[]
+  salesReturns     SalesReturn[]
   SalesRefund      SalesRefund[]
   PendingPOSSale   PendingPOSSale[]
 
@@ -540,11 +554,12 @@ model Purchase {
   updatedAt DateTime @updatedAt
 
   // Relations
-  assets             Asset[]
-  purchaseLines      PurchaseLine[]
-  purchasePayments   PurchasePayment[]
-  PurchaseRefunds    PurchaseRefund[]
-  vendorPaymentLines VendorPaymentLine[]
+  assets              Asset[]
+  purchaseLines       PurchaseLine[]
+  purchasePayments    PurchasePayment[]
+  PurchaseRefunds     PurchaseRefund[]
+  purchaseReturns     PurchaseReturn[]
+  vendorPaymentLines  VendorPaymentLine[]
 
   vendor Vendor @relation(fields: [vendorId], references: [id])
 
@@ -563,28 +578,103 @@ enum PurchaseOrderType {
 }
 
 model PurchaseLine {
-  id         String   @id @default(cuid())
-  purchaseId String
-  itemId     String?
-  assetName  String?
-  qty        Decimal  @db.Decimal(15, 4)
-  unitPrice  Decimal  @db.Decimal(15, 4)
-  lineTotal  Decimal  @db.Decimal(15, 4)
-  item       Item?    @relation(fields: [itemId], references: [id])
-  purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  id                  String               @id @default(cuid())
+  purchaseId          String
+  itemId              String?
+  assetName           String?
+  qty                 Decimal              @db.Decimal(15, 4)
+  unitPrice           Decimal              @db.Decimal(15, 4)
+  lineTotal           Decimal              @db.Decimal(15, 4)
+  item                Item?                @relation(fields: [itemId], references: [id])
+  purchase            Purchase             @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  purchaseReturnLines PurchaseReturnLine[]
 
   @@map("purchase_lines")
 }
 
-model SaleLine {
-  id        String  @id @default(cuid())
-  saleId    String
-  itemId    String
+enum PurchaseReturnStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+}
+
+enum PurchaseReturnSettlementMethod {
+  REFUND_CASH
+  SUPPLIER_CREDIT
+}
+
+model PurchaseReturn {
+  id         String @id @default(cuid())
+  returnNo   String @unique
+  purchaseId String
+  vendorId   String
+
+  returnDate DateTime @default(now())
+  reason     String?
+
+  status PurchaseReturnStatus @default(DRAFT)
+
+  subtotal    Decimal @db.Decimal(15, 2)
+  tax         Decimal @default(0) @db.Decimal(15, 2)
+  totalAmount Decimal @db.Decimal(15, 2) // = subtotal + tax, at ORIGINAL purchase price (AP basis)
+
+  // Weighted-avg inventory value actually removed, and the resulting
+  // variance posted to 5900. Populated only at CONFIRM.
+  inventoryValue Decimal @default(0) @db.Decimal(15, 2)
+  costVariance   Decimal @default(0) @db.Decimal(15, 2)
+
+  settlementMethod PurchaseReturnSettlementMethod?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  preparedBy  String
+  confirmedBy String?
+  confirmedAt DateTime?
+
+  cancelledBy String?
+  cancelledAt DateTime?
+
+  purchase Purchase @relation(fields: [purchaseId], references: [id])
+  vendor   Vendor   @relation(fields: [vendorId], references: [id])
+
+  preparer  User  @relation("PurchaseReturnPreparer", fields: [preparedBy], references: [id])
+  confirmer User? @relation("PurchaseReturnConfirmer", fields: [confirmedBy], references: [id])
+  canceller User? @relation("PurchaseReturnCanceller", fields: [cancelledBy], references: [id])
+
+  purchaseReturnLines PurchaseReturnLine[]
+
+  @@map("purchase_returns")
+}
+
+model PurchaseReturnLine {
+  id               String @id @default(cuid())
+  purchaseReturnId String
+  purchaseLineId   String
+  itemId           String
+
   qty       Decimal @db.Decimal(15, 4)
-  unitPrice Decimal @db.Decimal(15, 4)
-  lineTotal Decimal @db.Decimal(15, 4)
-  item      Item    @relation(fields: [itemId], references: [id])
-  sale      Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  unitPrice Decimal @db.Decimal(15, 4) // original purchase price — AP basis
+  unitCost  Decimal @default(0) @db.Decimal(15, 4) // current weighted-avg at confirm — inventory basis
+  lineTotal Decimal @db.Decimal(15, 2) // qty × unitPrice
+
+  purchaseReturn PurchaseReturn @relation(fields: [purchaseReturnId], references: [id], onDelete: Cascade)
+  purchaseLine   PurchaseLine   @relation(fields: [purchaseLineId], references: [id])
+  item           Item           @relation(fields: [itemId], references: [id])
+
+  @@map("purchase_return_lines")
+}
+
+model SaleLine {
+  id          String            @id @default(cuid())
+  saleId      String
+  itemId      String
+  qty         Decimal           @db.Decimal(15, 4)
+  unitPrice   Decimal           @db.Decimal(15, 4)
+  lineTotal   Decimal           @db.Decimal(15, 4)
+  item        Item              @relation(fields: [itemId], references: [id])
+  sale        Sale              @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  returnLines SalesReturnLine[]
 
   @@map("sale_lines")
 }
@@ -905,6 +995,7 @@ model Sale {
   saleLines            SaleLine[]
   salesReceipts        SalesReceipt[]
   SalesRefunds         SalesRefund[]
+  salesReturns         SalesReturn[]
 
   customer Customer @relation(fields: [customerId], references: [id])
 
@@ -915,6 +1006,77 @@ model Sale {
   memos     Memo[]
 
   @@map("sales")
+}
+
+enum SalesReturnStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+}
+
+enum ReturnSettlementMethod {
+  REFUND_CASH
+  CUSTOMER_CREDIT
+  APPLY_TO_INVOICE
+}
+
+model SalesReturn {
+  id         String @id @default(cuid())
+  returnNo   String @unique
+  saleId     String
+  customerId String
+
+  returnDate DateTime @default(now())
+  reason     String?
+
+  status SalesReturnStatus @default(DRAFT)
+
+  subtotal    Decimal @db.Decimal(15, 2)
+  tax         Decimal @default(0) @db.Decimal(15, 2)
+  totalAmount Decimal @db.Decimal(15, 2)
+
+  settlementMethod ReturnSettlementMethod?
+
+  // ───── Stage tracking ─────
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  preparedBy  String
+  confirmedBy String?
+  confirmedAt DateTime?
+
+  cancelledBy String?
+  cancelledAt DateTime?
+
+  // ───── Relations ─────
+  sale     Sale     @relation(fields: [saleId], references: [id])
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  preparer  User  @relation("SalesReturnPreparer", fields: [preparedBy], references: [id])
+  confirmer User? @relation("SalesReturnConfirmer", fields: [confirmedBy], references: [id])
+  canceller User? @relation("SalesReturnCanceller", fields: [cancelledBy], references: [id])
+
+  salesReturnLines SalesReturnLine[]
+
+  @@map("sales_returns")
+}
+
+model SalesReturnLine {
+  id            String @id @default(cuid())
+  salesReturnId String
+  saleLineId    String
+  itemId        String
+
+  qty       Decimal @db.Decimal(15, 4)
+  unitPrice Decimal @db.Decimal(15, 4) // from original sale line — customer credit basis
+  unitCost  Decimal @db.Decimal(15, 4) // resolved at confirm time — inventory/COGS basis
+  lineTotal Decimal @db.Decimal(15, 2)
+
+  salesReturn SalesReturn @relation(fields: [salesReturnId], references: [id], onDelete: Cascade)
+  saleLine    SaleLine    @relation(fields: [saleLineId], references: [id])
+  item        Item        @relation(fields: [itemId], references: [id])
+
+  @@map("sales_return_lines")
 }
 
 model PurchasePayment {
