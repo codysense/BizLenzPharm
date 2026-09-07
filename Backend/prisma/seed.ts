@@ -401,11 +401,11 @@ async function main() {
     //   }
     // }),
     await prisma.user.upsert({
-      where: { email: "lydiaiyaboafolabi@gmail.com" },
+      where: { email: "gm@company.com" },
       update: {},
       create: {
         name: "General Manager",
-        email: "lydiaiyaboafolabi@gmail.com",
+        email: "gm@company.com",
         password: hashedPassword,
         status: "ACTIVE",
       },
@@ -854,6 +854,26 @@ async function main() {
       create: {
         code: "6300",
         name: "Depreciation Expense",
+        accountType: "EXPENSES",
+        isActive: true,
+      },
+    }),
+    await prisma.chartOfAccount.upsert({
+      where: { code: "4900" },
+      update: {},
+      create: {
+        code: "4900",
+        name: "Sales Returns",
+        accountType: "INCOME",
+        isActive: true,
+      },
+    }),
+    await prisma.chartOfAccount.upsert({
+      where: { code: "5900" },
+      update: {},
+      create: {
+        code: "5900",
+        name: "Purchase Returns",
         accountType: "EXPENSES",
         isActive: true,
       },
